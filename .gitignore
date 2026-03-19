@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ML training artifacts
+backend/ml/train/
+backend/ml/dataset/
+*.pt
+!backend/ml/models/.gitkeep
+
+# Data (user-specific, large)
+backend/data/uploads/*
+!backend/data/uploads/.gitkeep
+backend/data/calibration.json
+backend/data/parts_db.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
