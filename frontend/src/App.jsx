@@ -2,6 +2,7 @@ import { Routes, Route, NavLink } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import PartsLibrary from "./pages/PartsLibrary";
 import Settings from "./pages/Settings";
+import HowToUse from "./pages/HowToUse";
 
 function NavItem({ to, label }) {
   return (
@@ -31,6 +32,10 @@ export default function App() {
         <NavItem to="/" label="Dashboard" />
         <NavItem to="/parts" label="Parça Kütüphanesi" />
         <NavItem to="/settings" label="Ayarlar" />
+        {/* Push help button to the right */}
+        <div className="ml-auto">
+          <NavItem to="/nasil-kullanilir" label="❓ Nasıl Kullanılır?" />
+        </div>
       </nav>
 
       {/* Page content */}
@@ -39,6 +44,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/parts" element={<PartsLibrary />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/nasil-kullanilir" element={<HowToUse />} />
         </Routes>
       </main>
     </div>
