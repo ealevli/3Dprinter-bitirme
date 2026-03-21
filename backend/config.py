@@ -15,7 +15,7 @@ CAMERA_INDEX = 0                    # Default camera device index
 
 # ── ArUco Calibration ─────────────────────────────────────────────────────────
 ARUCO_DICT = "DICT_4X4_50"
-ARUCO_MARKER_SIZE_MM = 30.0
+ARUCO_MARKER_SIZE_MM = 40.0
 
 # Real-world printer-coordinate positions of each ArUco marker (mm).
 # Key = marker ID, Value = (X_mm, Y_mm)
