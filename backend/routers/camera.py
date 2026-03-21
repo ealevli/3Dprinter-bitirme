@@ -52,6 +52,30 @@ async def capture():
     return {"image": encoded, "format": "jpeg"}
 
 
+@router.get("/scan")
+async def scan_cameras():
+    """
+    Scan camera indices 0-7 and return which ones are accessible.
+    Runs in a thread executor to avoid blocking the event loop.
+    """
+    import asyncio
+    import cv2 as _cv2
+
+    def _scan():
+        found = []
+        for i in range(8):
+            cap = _cv2.VideoCapture(i)
+            if cap.isOpened():
+                ret, _ = cap.read()
+                found.append({"index": i, "readable": ret})
+                cap.release()
+        return found
+
+    loop = asyncio.get_event_loop()
+    cameras = await loop.run_in_executor(None, _scan)
+    return {"cameras": cameras}
+
+
 @router.post("/calibrate")
 async def calibrate():
     """Run ArUco calibration on the current camera frame."""

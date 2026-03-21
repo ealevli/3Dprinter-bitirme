@@ -22,6 +22,8 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
   const [calibResult, setCalibResult] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [foundCameras, setFoundCameras] = useState(null);
 
   useEffect(() => {
     fetchPorts();
@@ -158,17 +160,64 @@ export default function Settings() {
           </div>
         ))}
 
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">Kamera İndeksi</label>
-          <input
-            type="number"
-            min={0}
-            value={config.camera_index}
-            onChange={(e) =>
-              setConfig({ ...config, camera_index: parseInt(e.target.value) })
-            }
-            className="w-24 bg-slate-700 rounded px-3 py-1.5 text-sm"
-          />
+        <div className="space-y-2">
+          <label className="block text-xs text-slate-400">Kamera İndeksi</label>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="number"
+              min={0}
+              value={config.camera_index}
+              onChange={(e) =>
+                setConfig({ ...config, camera_index: parseInt(e.target.value) })
+              }
+              className="w-24 bg-slate-700 rounded px-3 py-1.5 text-sm"
+            />
+            <button
+              onClick={async () => {
+                setScanning(true);
+                setFoundCameras(null);
+                const res = await axios.get("/camera/scan").catch(() => null);
+                setFoundCameras(res?.data?.cameras ?? []);
+                setScanning(false);
+              }}
+              disabled={scanning}
+              className="px-3 py-1.5 text-xs rounded bg-slate-600 hover:bg-slate-500 disabled:opacity-50"
+            >
+              {scanning ? "Taranıyor…" : "Kameraları Tara"}
+            </button>
+          </div>
+
+          {/* Scan results */}
+          {scanning && (
+            <p className="text-xs text-slate-400">0–7 arası indeksler deneniyor…</p>
+          )}
+          {foundCameras !== null && (
+            <div className="space-y-1">
+              {foundCameras.length === 0 ? (
+                <p className="text-xs text-red-400">Hiç kamera bulunamadı.</p>
+              ) : (
+                foundCameras.map((cam) => (
+                  <div key={cam.index} className="flex items-center gap-2">
+                    <span className={`text-xs ${cam.readable ? "text-green-400" : "text-amber-400"}`}>
+                      {cam.readable ? "✓" : "⚠"}
+                    </span>
+                    <span className="text-xs text-slate-300">
+                      İndeks {cam.index} — {cam.readable ? "görüntü alınıyor" : "açıldı ama frame yok"}
+                    </span>
+                    <button
+                      onClick={() => setConfig({ ...config, camera_index: cam.index })}
+                      className="text-xs text-blue-400 hover:text-blue-300 underline"
+                    >
+                      Seç
+                    </button>
+                  </div>
+                ))
+              )}
+              <p className="text-xs text-slate-500 pt-1">
+                "Seç" butonuna basıp ardından Kaydet'e bas.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
