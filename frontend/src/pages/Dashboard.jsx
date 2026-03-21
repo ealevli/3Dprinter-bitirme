@@ -58,6 +58,7 @@ export default function Dashboard() {
   const [isScanning, setIsScanning] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
+  const [showGcode, setShowGcode] = useState(false);
   const previewRef = useRef(null);
 
   // Auto-scroll to G-code preview when it appears
@@ -225,10 +226,18 @@ export default function Dashboard() {
                   G-code Önizleme — {gcodeResult.line_count} satır
                   {gcodeResult.estimated_time_s > 0 && ` · ~${Math.round(gcodeResult.estimated_time_s)}s`}
                 </span>
-                <button
-                  onClick={() => setGcodeResult(null)}
-                  className="text-xs text-slate-500 hover:text-slate-300"
-                >✕</button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowGcode((v) => !v)}
+                    className="text-xs text-slate-400 hover:text-slate-200 border border-slate-600 rounded px-2 py-0.5"
+                  >
+                    {showGcode ? "Kodu Gizle" : "G-code"}
+                  </button>
+                  <button
+                    onClick={() => { setGcodeResult(null); setShowGcode(false); }}
+                    className="text-xs text-slate-500 hover:text-slate-300"
+                  >✕</button>
+                </div>
               </div>
               <div style={{ height: 240 }}>
                 <GCodePreview
@@ -237,6 +246,25 @@ export default function Dashboard() {
                   contourMm={detection?.contour_mm ?? []}
                 />
               </div>
+              {showGcode && (
+                <div className="border-t border-slate-700">
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-slate-800">
+                    <span className="text-xs text-slate-400 font-medium">Ham G-code</span>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(gcodeResult.gcode)}
+                      className="text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      Kopyala
+                    </button>
+                  </div>
+                  <textarea
+                    readOnly
+                    value={gcodeResult.gcode}
+                    className="w-full bg-slate-950 text-slate-300 text-xs font-mono px-3 py-2 resize-none focus:outline-none"
+                    style={{ height: 220 }}
+                  />
+                </div>
+              )}
             </div>
           )}
 

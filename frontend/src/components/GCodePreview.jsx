@@ -6,15 +6,21 @@
  *   - Cyan line          : WALL-OUTER perimeter pass
  *   - Blue lines         : infill (zigzag / spiral / parallel)
  *
+ * paths     : list of SEGMENTS — each segment is [{x,y}, ...] coating pass.
+ *             Zigzag/parallel → 2-point segments [start, end].
+ *             Spiral          → multi-point ring segments.
+ * wallPaths : flat list [{x,y}] — perimeter polyline.
+ * contourMm : raw detection contour [[x,y]].
+ *
  * Aspect ratio is always preserved (no stretching).
  */
 
 import { useEffect, useRef } from "react";
 
 export default function GCodePreview({
-  paths     = [],   // infill XY points  [{x,y}]
-  wallPaths = [],   // wall XY points    [{x,y}]
-  contourMm = [],   // raw detection contour [[x,y]]
+  paths     = [],   // list of segments: [[{x,y},...], ...]
+  wallPaths = [],   // flat list: [{x,y}, ...]
+  contourMm = [],   // raw detection contour: [[x,y], ...]
 }) {
   const canvasRef = useRef(null);
 
@@ -32,10 +38,12 @@ export default function GCodePreview({
     const hasData = paths.length > 0 || wallPaths.length > 0 || contourMm.length > 0;
     if (!hasData) return;
 
-    // ── Compute unified bounding box ─────────────────────────────────────
+    // ── Collect all XY points for unified bounding box ────────────────────
     const allX = [];
     const allY = [];
-    paths.forEach(p    => { allX.push(p.x); allY.push(p.y); });
+
+    // paths is now list-of-segments: [[{x,y},...], ...]
+    paths.forEach(seg => seg.forEach(p => { allX.push(p.x); allY.push(p.y); }));
     wallPaths.forEach(p => { allX.push(p.x); allY.push(p.y); });
     contourMm.forEach(([x, y]) => { allX.push(x); allY.push(y); });
 
@@ -66,7 +74,7 @@ export default function GCodePreview({
     });
 
     // ── Helper: stroke an array of {x,y} as a polyline ───────────────────
-    const strokeLine = (pts, color, width = 1, dash = []) => {
+    const strokePolyline = (pts, color, width = 1, dash = []) => {
       if (pts.length < 2) return;
       ctx.strokeStyle = color;
       ctx.lineWidth   = width;
@@ -83,32 +91,31 @@ export default function GCodePreview({
     // ── 1. Part contour outline (green dashed) ────────────────────────────
     if (contourMm.length >= 3) {
       const pts = contourMm.map(([x, y]) => ({ x, y }));
-      strokeLine([...pts, pts[0]], "#22c55e", 1.5, [5, 4]);
+      strokePolyline([...pts, pts[0]], "#22c55e", 1.5, [5, 4]);
     }
 
-    // ── 2. Wall-outer path (cyan) ─────────────────────────────────────────
+    // ── 2. Wall-outer path (cyan) — flat polyline ─────────────────────────
     if (wallPaths.length >= 2) {
-      strokeLine(wallPaths, "#06b6d4", 1.5);
+      strokePolyline(wallPaths, "#06b6d4", 1.5);
     }
 
-    // ── 3. Infill — paths = [start, end, start, end, ...] pairs ──────────
-    // Every 2 consecutive points form one coating line segment.
-    // Draw them all as individual lines (no jump-detection complexity).
-    if (paths.length >= 2) {
+    // ── 3. Infill — paths is list of segments ─────────────────────────────
+    // Each segment is a polyline: [travelStart, pt1, pt2, ...] for one coating pass.
+    // Zigzag/parallel → 2-pt segments. Spiral → multi-pt ring segments.
+    if (paths.length > 0) {
       ctx.strokeStyle = "#3b82f6";
       ctx.lineWidth   = 1.5;
       ctx.setLineDash([]);
 
-      // paths arrive as flat list: [travelPt, coatEndPt, travelPt, coatEndPt…]
-      // Just draw every consecutive pair as a line segment.
-      for (let i = 0; i + 1 < paths.length; i += 2) {
-        const { cx: x1, cy: y1 } = tc(paths[i].x,   paths[i].y);
-        const { cx: x2, cy: y2 } = tc(paths[i+1].x, paths[i+1].y);
+      paths.forEach(seg => {
+        if (seg.length < 2) return;
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
+        seg.forEach((p, i) => {
+          const { cx, cy } = tc(p.x, p.y);
+          i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
+        });
         ctx.stroke();
-      }
+      });
     }
 
     // ── 4. Axis labels ────────────────────────────────────────────────────
@@ -119,7 +126,7 @@ export default function GCodePreview({
     ctx.fillText(`${maxY.toFixed(1)}`, 4, offY + 8);
     ctx.fillText(`${minY.toFixed(1)} mm`, 4, offY + drawH);
 
-    // ── 5. Legend ────────────────────────────────────────────────────────
+    // ── 5. Legend ─────────────────────────────────────────────────────────
     const legend = [
       { color: "#22c55e", label: "Kontur" },
       { color: "#06b6d4", label: "Dış çevre" },
@@ -144,7 +151,7 @@ export default function GCodePreview({
   if (paths.length === 0 && wallPaths.length === 0) {
     return (
       <div className="w-full h-full flex items-center justify-center text-slate-500 text-sm">
-        G-code önizleme için "Önizle" butonuna basın.
+        G-code önizleme için &quot;Önizle&quot; butonuna basın.
       </div>
     );
   }

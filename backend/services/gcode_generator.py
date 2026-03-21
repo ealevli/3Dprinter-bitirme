@@ -33,9 +33,10 @@ PatternType = Literal["zigzag", "parallel", "spiral"]
 # ── Default G-code sequences ──────────────────────────────────────────────────
 
 DEFAULT_START_GCODE = """\
-G28 ; Eksenleri sifirla
+G28 ; Eksenleri sifirla (BLTouch Z=0 tabla yuzeyine kalibre eder)
+; G29 ; BLTouch otomatik tabla seviyele — istege bagli, ~3 dak
 G90 ; Mutlak konum modu
-G0 F{travel_rate} Z{z_travel} ; Nozzle'i kaldir
+G0 F{travel_rate} Z{z_travel} ; Nozzle'i kaldir (bant + offset + 5mm)
 G0 F{travel_rate} X{part_x} Y{part_y} ; Parca konumuna git"""
 
 DEFAULT_END_GCODE = """\
@@ -316,9 +317,10 @@ def generate_gcode(
     gcode_str = "\n".join(all_lines)
 
     # ── Preview paths ─────────────────────────────────────────────────────────
-    # Only collect X/Y from G0/G1 lines (skip comments and Z-only moves)
-    def _parse_paths(line_list: list[str]) -> list[dict]:
-        pts = []
+
+    def _parse_flat(line_list: list[str]) -> list[dict]:
+        """Flat list of {x,y} from all G0/G1 lines that contain X and Y."""
+        pts: list[dict] = []
         for ln in line_list:
             if ln.startswith(";") or not ln.startswith("G"):
                 continue
@@ -333,13 +335,48 @@ def generate_gcode(
                 pts.append({"x": tok["X"], "y": tok["Y"]})
         return pts
 
-    wall_paths = _parse_paths(wall)
-    fill_paths = _parse_paths(fill)
+    def _parse_segments(line_list: list[str]) -> list[list[dict]]:
+        """Group G-code into coating segments for canvas preview.
 
-    # Time estimate: count actual coating moves (G1 with no Z, just XY)
+        Each G0 rapid-travel starts a new segment.
+        G1 lines with X and Y are coating points added to the active segment.
+        This correctly handles both zigzag (2-point segments) and spiral
+        (multi-point ring segments).
+        """
+        segments: list[list[dict]] = []
+        current: list[dict] = []
+        for ln in line_list:
+            if ln.startswith(";") or not ln.startswith("G"):
+                continue
+            tok: dict[str, float] = {}
+            for t in ln.split():
+                if t[0] in "XYZF" and len(t) > 1:
+                    try:
+                        tok[t[0]] = float(t[1:])
+                    except ValueError:
+                        pass
+            if ln.startswith("G0"):
+                # Travel — close current segment, start new one
+                if current:
+                    segments.append(current)
+                    current = []
+                if "X" in tok and "Y" in tok:
+                    current = [{"x": tok["X"], "y": tok["Y"]}]
+            elif "X" in tok and "Y" in tok:
+                # Coating move — extend current segment
+                current.append({"x": tok["X"], "y": tok["Y"]})
+        if current:
+            segments.append(current)
+        return segments
+
+    wall_paths   = _parse_flat(wall)       # single perimeter polyline
+    fill_flat    = _parse_flat(fill)       # flat list — used for time estimate only
+    fill_segments = _parse_segments(fill)  # structured — used for canvas preview
+
+    # Time estimate (flat list, all XY moves summed)
     coating_distance = 0.0
     prev = None
-    for pt in fill_paths:
+    for pt in fill_flat:
         if prev:
             dx = pt["x"] - prev["x"]
             dy = pt["y"] - prev["y"]
@@ -351,6 +388,6 @@ def generate_gcode(
         "gcode":              gcode_str,
         "line_count":         len(all_lines),
         "estimated_time_s":   round(estimated_s, 1),
-        "paths":              fill_paths,
-        "wall_paths":         wall_paths,
+        "paths":              fill_segments,   # list[list[{x,y}]] — one sub-list per coating pass
+        "wall_paths":         wall_paths,      # list[{x,y}] — perimeter polyline
     }

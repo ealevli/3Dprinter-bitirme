@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
 from services.pump_serial import pump_serial
 
 router = APIRouter()
@@ -30,6 +31,30 @@ def _ensure_connected() -> None:
                 status_code=503,
                 detail="Arduino'ya bağlanılamadı. Port ayarlarını kontrol edin.",
             )
+
+
+@router.post("/connect")
+async def connect():
+    """Explicitly open the serial connection to the Arduino pump controller."""
+    if pump_serial.is_connected:
+        return {"message": "Arduino zaten bağlı.", "connected": True}
+    ok = pump_serial.connect()
+    if not ok:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Arduino'ya bağlanılamadı (port: {config.PUMP_PORT}). "
+                "Ayarlar sayfasından doğru portu seçip kaydedin."
+            ),
+        )
+    return {"message": f"Arduino bağlandı ({config.PUMP_PORT}).", "connected": True}
+
+
+@router.post("/disconnect")
+async def disconnect():
+    """Close the serial connection to the Arduino."""
+    pump_serial.disconnect()
+    return {"message": "Arduino bağlantısı kesildi.", "connected": False}
 
 
 @router.post("/start")
