@@ -17,37 +17,81 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
 
-def _aruco_detector() -> cv2.aruco.ArucoDetector:
-    """Create an ArucoDetector for the dictionary defined in config."""
+def _make_detector(adaptive_constant: int = 7) -> cv2.aruco.ArucoDetector:
+    """Create an ArucoDetector with tunable parameters."""
     aruco_dict = cv2.aruco.getPredefinedDictionary(
         getattr(cv2.aruco, config.ARUCO_DICT)
     )
     params = cv2.aruco.DetectorParameters()
+    # Wider adaptive threshold window range → finds markers in varied lighting
+    params.adaptiveThreshWinSizeMin = 3
+    params.adaptiveThreshWinSizeMax = 53
+    params.adaptiveThreshWinSizeStep = 4
+    params.adaptiveThreshConstant = adaptive_constant
+    # More lenient polygon detection
+    params.minMarkerPerimeterRate = 0.02
+    params.maxMarkerPerimeterRate = 4.0
+    params.polygonalApproxAccuracyRate = 0.08
+    params.minCornerDistanceRate = 0.03
+    params.minDistanceToBorder = 2
     return cv2.aruco.ArucoDetector(aruco_dict, params)
 
 
-def detect_markers(
-    frame: np.ndarray,
-) -> dict[int, tuple[float, float]]:
+def _preprocess_variants(frame: np.ndarray) -> list[np.ndarray]:
+    """
+    Return several preprocessed versions of frame to try ArUco detection on.
+    Different lighting conditions need different preprocessing.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    variants = [gray]  # 1. original gray
+
+    # 2. CLAHE (local contrast enhancement — helps with bright spots)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    variants.append(clahe.apply(gray))
+
+    # 3. Sharpened
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    sharp = cv2.filter2D(gray, -1, kernel)
+    variants.append(sharp)
+
+    # 4. Histogram equalized
+    variants.append(cv2.equalizeHist(gray))
+
+    return variants
+
+
+def detect_markers(frame: np.ndarray) -> dict[int, tuple[float, float]]:
     """
     Detect ArUco markers in *frame*.
 
+    Tries multiple preprocessing strategies and detector parameters to handle
+    difficult lighting conditions.
+
     Returns a dict mapping marker_id → (pixel_cx, pixel_cy).
     """
-    detector = _aruco_detector()
-    corners, ids, _ = detector.detectMarkers(frame)
     result: dict[int, tuple[float, float]] = {}
+    best: dict[int, tuple[float, float]] = {}
 
-    if ids is None:
-        return result
+    variants = _preprocess_variants(frame)
 
-    for corner_group, marker_id in zip(corners, ids.flatten()):
-        pts = corner_group[0]  # shape (4, 2)
-        cx = float(pts[:, 0].mean())
-        cy = float(pts[:, 1].mean())
-        result[int(marker_id)] = (cx, cy)
+    for constant in (7, 3, 12):
+        detector = _make_detector(adaptive_constant=constant)
+        for preprocessed in variants:
+            corners, ids, _ = detector.detectMarkers(preprocessed)
+            if ids is None:
+                continue
+            found: dict[int, tuple[float, float]] = {}
+            for corner_group, marker_id in zip(corners, ids.flatten()):
+                pts = corner_group[0]
+                cx = float(pts[:, 0].mean())
+                cy = float(pts[:, 1].mean())
+                found[int(marker_id)] = (cx, cy)
+            if len(found) > len(best):
+                best = found
+            if len(best) >= 4:
+                return best  # found all 4 — done
 
-    return result
+    return best
 
 
 def compute_homography(

@@ -120,7 +120,10 @@ export default function Dashboard() {
         {/* Left: camera + preview */}
         <div className="flex-1 flex flex-col gap-3">
           <div className="relative bg-slate-900 rounded-lg overflow-hidden" style={{ height: 420 }}>
-            <CameraFeed detectionImage={detection?.image} />
+            <CameraFeed
+              detectionImage={detection?.image}
+              onClearDetection={() => setDetection(null)}
+            />
           </div>
 
           {gcodeResult && (

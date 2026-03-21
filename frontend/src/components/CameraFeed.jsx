@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 const POLL_MS = 100; // ~10 fps — smooth enough, low CPU
 const ERROR_RETRY_MS = 2000;
 
-export default function CameraFeed({ detectionImage }) {
+export default function CameraFeed({ detectionImage, onClearDetection }) {
   const imgRef = useRef(null);
   const timerRef = useRef(null);
   const activeRef = useRef(true);
@@ -78,12 +78,10 @@ export default function CameraFeed({ detectionImage }) {
           className="w-full h-full object-contain"
         />
         <button
-          onClick={() => {
-            /* parent clears detectionImage — nothing to do here */
-          }}
+          onClick={onClearDetection}
           className="absolute top-2 right-2 text-xs bg-black/50 hover:bg-black/80 text-white px-2 py-1 rounded"
         >
-          Canlıya dön
+          ▶ Canlıya dön
         </button>
       </div>
     );

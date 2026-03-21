@@ -128,10 +128,23 @@ def detect_part(
     markers_found = len(marker_px)
 
     # ── 2. Maske oluştur ─────────────────────────────────────────────────────
-    # Marker boyutunu piksele dönüştür (yaklaşık: frame genişliğine göre)
-    frame_w = frame.shape[1]
-    marker_size_px = max(40, frame_w // 12)  # adaptif tahmin
-    mask = _build_bed_mask(frame, marker_px, marker_size_px)
+    frame_h, frame_w = frame.shape[:2]
+    marker_size_px = max(40, frame_w // 12)
+
+    if len(marker_px) >= 4:
+        # Tam kalibrasyon — marker convex hull kullan
+        mask = _build_bed_mask(frame, marker_px, marker_size_px)
+    elif len(marker_px) >= 2:
+        # Kısmi — bulunan markerların convex hull'u
+        mask = _build_bed_mask(frame, marker_px, marker_size_px)
+    else:
+        # Marker yok — merkez %70 ROI kullan (kenar gürültüsünü eler)
+        mask = np.zeros((frame_h, frame_w), dtype=np.uint8)
+        mx0 = int(frame_w * 0.15)
+        my0 = int(frame_h * 0.15)
+        mx1 = int(frame_w * 0.85)
+        my1 = int(frame_h * 0.85)
+        mask[my0:my1, mx0:mx1] = 255
 
     bed_area = _bed_area_px(marker_px)
 
