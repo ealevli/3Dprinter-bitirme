@@ -25,6 +25,22 @@ from services.calibration import load_calibration
 router = APIRouter()
 
 
+@router.get("/config")
+async def get_config():
+    """Return the current runtime configuration."""
+    return {
+        "printer_port": config.PRINTER_PORT,
+        "printer_baudrate": config.PRINTER_BAUDRATE,
+        "pump_port": config.PUMP_PORT,
+        "pump_baudrate": config.PUMP_BAUDRATE,
+        "camera_index": config.CAMERA_INDEX,
+        "aruco_marker_positions_mm": {
+            str(k): list(v)
+            for k, v in config.ARUCO_MARKER_POSITIONS_MM.items()
+        },
+    }
+
+
 @router.get("/ports")
 async def list_ports():
     """Return all detected serial ports on the host machine."""

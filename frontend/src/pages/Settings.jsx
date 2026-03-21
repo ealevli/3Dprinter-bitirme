@@ -24,7 +24,28 @@ export default function Settings() {
   useEffect(() => {
     fetchPorts();
     fetchStatus();
+    fetchConfig();
   }, []);
+
+  async function fetchConfig() {
+    const res = await axios.get("/system/config").catch(() => null);
+    if (!res) return;
+    const d = res.data;
+    setConfig({
+      printer_port: d.printer_port ?? "",
+      printer_baudrate: d.printer_baudrate ?? 115200,
+      pump_port: d.pump_port ?? "",
+      pump_baudrate: d.pump_baudrate ?? 9600,
+      camera_index: d.camera_index ?? 0,
+    });
+    if (d.aruco_marker_positions_mm) {
+      setMarkerPositions(
+        Object.fromEntries(
+          Object.entries(d.aruco_marker_positions_mm).map(([k, v]) => [k, v])
+        )
+      );
+    }
+  }
 
   async function fetchPorts() {
     const res = await axios.get("/system/ports").catch(() => null);
