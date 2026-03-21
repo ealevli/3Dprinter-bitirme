@@ -1,210 +1,225 @@
 """
-generate_aruco.py — Print-ready ArUco calibration markers.
+generate_aruco.py — A4 baskıya hazır ArUco kalibrasyon markerleri üretir.
 
-Generates a PNG sheet with 4 ArUco markers (IDs 0–3, DICT_4X4_50) plus a
-placement diagram showing where each marker goes on the printer bed.
+Kullanım:
+    python scripts/generate_aruco.py
 
-Usage:
-    python scripts/generate_aruco.py          # saves output/aruco_markers.png
-    python scripts/generate_aruco.py --png    # also saves individual marker PNGs
+Çıktı: output/aruco_print.pdf  (A4, doğrudan yazıcıdan bas)
+       output/aruco_markers.png (yedek PNG)
+
+Baskı talimatı:
+    PDF'i aç → Yazdır → Ölçek: %100 / Gerçek Boyut / Actual Size
+    → Her marker tam 40x40mm çıkar
 """
 
-import argparse
 import os
 import sys
-
 import cv2
 import numpy as np
+from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# ── Constants ────────────────────────────────────────────────────────────────
-MARKER_SIZE_PX = 300       # inner marker image size (pixels)
-DPI = 300                  # target print DPI
-MARKER_MM = 30             # desired physical marker size (mm)
-MARGIN_PX = 60             # white margin around each marker
-FONT = cv2.FONT_HERSHEY_SIMPLEX
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
 
+# Fiziksel boyutlar
+DPI         = 300
+MM_PER_INCH = 25.4
+MARKER_MM   = 40          # marker iç boyutu (mm) — 40mm kolay kesim için
+MARGIN_MM   = 15          # marker çevresinde boşluk
+LABEL_MM    = 12          # etiket alanı yüksekliği
+
+def mm2px(mm): return int(round(mm * DPI / MM_PER_INCH))
+
+MARKER_PX = mm2px(MARKER_MM)
+MARGIN_PX = mm2px(MARGIN_MM)
+LABEL_PX  = mm2px(LABEL_MM)
+
+# A4 piksel boyutu @ 300 DPI
+A4_W_PX = mm2px(210)
+A4_H_PX = mm2px(297)
+
+FONT       = cv2.FONT_HERSHEY_SIMPLEX
+ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+
 LABELS = [
-    ("0", "Sol Ön"),
-    ("1", "Sağ Ön"),
-    ("2", "Sağ Arka"),
-    ("3", "Sol Arka"),
-]
-
-# Bed corner order for the diagram (mirrors the label positions)
-DIAGRAM_CORNERS = [
-    ("0\nSol Ön",   0, 0),    # top-left
-    ("1\nSağ Ön",   0, 1),    # top-right
-    ("2\nSağ Arka", 1, 1),    # bottom-right
-    ("3\nSol Arka", 1, 0),    # bottom-left
+    ("ID: 0", "Sol Ön  (X=10, Y=10)"),
+    ("ID: 1", "Sağ Ön  (X=200, Y=10)"),
+    ("ID: 2", "Sağ Arka (X=200, Y=200)"),
+    ("ID: 3", "Sol Arka (X=10, Y=200)"),
 ]
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def make_marker_image(marker_id: int) -> np.ndarray:
-    """Generate a single ArUco marker as a grayscale image."""
-    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-    return cv2.aruco.generateImageMarker(aruco_dict, marker_id, MARKER_SIZE_PX, borderBits=1)
+def put_centered(img, text, cx, cy, scale=0.5, thick=1, color=0):
+    (tw, th), _ = cv2.getTextSize(text, FONT, scale, thick)
+    cv2.putText(img, text, (cx - tw//2, cy + th//2), FONT, scale, color, thick, cv2.LINE_AA)
 
 
-def draw_crosshair(img: np.ndarray, cx: int, cy: int, size: int = 15, color=0) -> None:
-    """Draw a registration crosshair (used for corner marks)."""
-    cv2.line(img, (cx - size, cy), (cx + size, cy), color, 1)
-    cv2.line(img, (cx, cy - size), (cx, cy + size), color, 1)
+def make_marker_cell(mid: int) -> np.ndarray:
+    """Tek marker hücresi: marker + kesim çizgisi + etiket."""
+    cell_w = MARKER_PX + MARGIN_PX * 2
+    cell_h = MARKER_PX + MARGIN_PX * 2 + LABEL_PX
+    cell = np.ones((cell_h, cell_w), np.uint8) * 255
 
-
-def put_text_centered(img, text, cx, cy, scale=0.6, thickness=1, color=0):
-    (w, h), _ = cv2.getTextSize(text, FONT, scale, thickness)
-    cv2.putText(img, text, (cx - w // 2, cy + h // 2), FONT, scale, color, thickness, cv2.LINE_AA)
-
-
-def build_marker_cell(marker_id: int, label: str, sublabel: str) -> np.ndarray:
-    """Build a single cell: marker + cut border + text label."""
-    cell_size = MARKER_SIZE_PX + MARGIN_PX * 2
-    label_area = 60
-    cell = np.ones((cell_size + label_area, cell_size), dtype=np.uint8) * 255
-
-    # Place marker
+    # Marker
+    m = cv2.aruco.generateImageMarker(ARUCO_DICT, mid, MARKER_PX, borderBits=1)
     y0, x0 = MARGIN_PX, MARGIN_PX
-    marker = make_marker_image(marker_id)
-    cell[y0: y0 + MARKER_SIZE_PX, x0: x0 + MARKER_SIZE_PX] = marker
+    cell[y0:y0+MARKER_PX, x0:x0+MARKER_PX] = m
 
-    # Dashed cut border around marker
-    for x in range(x0, x0 + MARKER_SIZE_PX, 6):
-        cell[y0 - 1, x] = 0
-        cell[y0 + MARKER_SIZE_PX, x] = 0
-    for y in range(y0, y0 + MARKER_SIZE_PX, 6):
-        cell[y, x0 - 1] = 0
-        cell[y, x0 + MARKER_SIZE_PX] = 0
+    # Kesim çizgisi (kesik)
+    dash = 8
+    for x in range(x0, x0+MARKER_PX, dash*2):
+        cell[y0-2, x:x+dash] = 0
+        cell[y0+MARKER_PX+1, x:x+dash] = 0
+    for y in range(y0, y0+MARKER_PX, dash*2):
+        cell[y:y+dash, x0-2] = 0
+        cell[y:y+dash, x0+MARKER_PX+1] = 0
 
-    # Corner crosshairs
-    for (cy, cx) in [(y0, x0), (y0, x0 + MARKER_SIZE_PX),
-                     (y0 + MARKER_SIZE_PX, x0), (y0 + MARKER_SIZE_PX, x0 + MARKER_SIZE_PX)]:
-        draw_crosshair(cell, cx, cy)
+    # Köşe + işaretleri
+    for (cy, cx) in [(y0, x0), (y0, x0+MARKER_PX),
+                     (y0+MARKER_PX, x0), (y0+MARKER_PX, x0+MARKER_PX)]:
+        cv2.line(cell, (cx-12, cy), (cx+12, cy), 0, 1)
+        cv2.line(cell, (cx, cy-12), (cx, cy+12), 0, 1)
 
-    # Label
-    center_x = cell_size // 2
-    put_text_centered(cell, f"ID: {label} — {sublabel}", center_x, cell_size + 20, scale=0.65, thickness=1)
-    put_text_centered(cell, f"({MARKER_MM}x{MARKER_MM} mm @ {DPI} DPI)", center_x, cell_size + 44, scale=0.45, thickness=1, color=100)
+    # Etiket
+    cx = cell_w // 2
+    ly = MARGIN_PX + MARKER_PX + LABEL_PX // 3
+    put_centered(cell, LABELS[mid][0], cx, ly,          scale=0.7, thick=2)
+    put_centered(cell, LABELS[mid][1], cx, ly + mm2px(5), scale=0.4, color=80)
 
     return cell
 
 
-def build_diagram(bed_w_mm=220, bed_h_mm=220, size_px=600) -> np.ndarray:
-    """Build a top-down printer bed placement diagram."""
-    pad = 80
-    img = np.ones((size_px + pad * 2, size_px + pad * 2), dtype=np.uint8) * 255
+def make_ruler(width_px: int, height_px: int = None) -> np.ndarray:
+    """10mm aralıklı cetvel — baskıdan sonra ölçüp doğrulayabilirsiniz."""
+    if height_px is None:
+        height_px = mm2px(8)
+    ruler = np.ones((height_px, width_px), np.uint8) * 255
+    tick_10 = mm2px(10)
+    tick_5  = mm2px(5)
+    for px in range(0, width_px, tick_5):
+        h = height_px // 2 if (px % tick_10 == 0) else height_px // 4
+        cv2.line(ruler, (px, height_px), (px, height_px - h), 0, 1)
+    for i, px in enumerate(range(0, width_px, tick_10)):
+        put_centered(ruler, f"{i*10}", px, height_px//4, scale=0.3)
+    put_centered(ruler, "mm", width_px - mm2px(8), height_px//2, scale=0.3, color=120)
+    return ruler
 
-    # Bed outline
-    cv2.rectangle(img, (pad, pad), (pad + size_px, pad + size_px), 0, 2)
 
-    # Nozzle home marker (front-left = 0,0)
-    cv2.circle(img, (pad, pad + size_px), 8, 0, -1)
-    put_text_centered(img, "Home", pad + 5, pad + size_px - 14, scale=0.4)
+def make_diagram() -> np.ndarray:
+    """Tabla yerleşim şeması — hangi köşeye hangi marker gidiyor."""
+    size = mm2px(80)
+    pad  = mm2px(10)
+    img  = np.ones((size + pad*2, size + pad*2), np.uint8) * 255
 
-    # Axes
-    cv2.arrowedLine(img, (pad, pad + size_px), (pad + 70, pad + size_px), 0, 1, tipLength=0.3)
-    cv2.arrowedLine(img, (pad, pad + size_px), (pad, pad + size_px - 70), 0, 1, tipLength=0.3)
-    put_text_centered(img, "X+", pad + 80, pad + size_px + 18, scale=0.4)
-    put_text_centered(img, "Y+", pad - 18, pad + size_px - 80, scale=0.4)
+    # Tabla dış çerçeve
+    cv2.rectangle(img, (pad, pad), (pad+size, pad+size), 0, 2)
 
-    # Bed size label
-    put_text_centered(img, f"{bed_w_mm}mm", pad + size_px // 2, pad + size_px + 28, scale=0.5)
-    put_text_centered(img, f"{bed_h_mm}mm", pad - 36, pad + size_px // 2, scale=0.5)
-
-    # Marker positions — corners of the bed
-    marker_offsets = {
-        "0\nSol On":   (pad + 30, pad + size_px - 30),
-        "1\nSag On":   (pad + size_px - 30, pad + size_px - 30),
-        "2\nSag Arka": (pad + size_px - 30, pad + 30),
-        "3\nSol Arka": (pad + 30, pad + 30),
-    }
-    for lbl, (cx, cy) in marker_offsets.items():
-        cv2.rectangle(img, (cx - 20, cy - 20), (cx + 20, cy + 20), 0, 2)
+    # Köşe kutuları + ID
+    corners = [
+        (pad+8,      pad+size-30, "0\nSol Ön"),
+        (pad+size-30, pad+size-30, "1\nSağ Ön"),
+        (pad+size-30, pad+8,       "2\nSağ Arka"),
+        (pad+8,      pad+8,       "3\nSol Arka"),
+    ]
+    for (cx, cy, lbl) in corners:
+        cv2.rectangle(img, (cx, cy), (cx+22, cy+22), 0, 2)
         id_char = lbl[0]
-        put_text_centered(img, id_char, cx, cy, scale=0.7, thickness=2)
-        name = lbl.split("\n")[1]
-        put_text_centered(img, name, cx, cy + 34, scale=0.38)
+        put_centered(img, id_char, cx+11, cy+11, scale=0.6, thick=2)
 
-    # Title
-    put_text_centered(img, "TABLA MARKER YERLESIM DIAGRAMI", pad + size_px // 2, 30, scale=0.55, thickness=1)
-    put_text_centered(img, "Kamera tepeden bakiyor — marker'lari koseye yapi stir", pad + size_px // 2, 54, scale=0.38)
+    # Ok işareti (Home = sol ön köşe = X0 Y0)
+    cv2.arrowedLine(img, (pad, pad+size), (pad+mm2px(12), pad+size), 0, 1, tipLength=0.3)
+    cv2.arrowedLine(img, (pad, pad+size), (pad, pad+size-mm2px(12)), 0, 1, tipLength=0.3)
+    put_centered(img, "X+", pad+mm2px(16), pad+size+5, scale=0.35)
+    put_centered(img, "Y+", pad-8, pad+size-mm2px(16), scale=0.35)
 
+    put_centered(img, "TABLA YERLESIM SEMASI", pad+size//2, pad-12, scale=0.4, thick=1)
     return img
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+def build_a4_sheet() -> np.ndarray:
+    """4 markeri A4 sayfasına yerleştir."""
+    sheet = np.ones((A4_H_PX, A4_W_PX), np.uint8) * 255
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--png", action="store_true", help="Also save individual marker PNGs")
-    args = parser.parse_args()
+    cells = [make_marker_cell(i) for i in range(4)]
+    ch, cw = cells[0].shape
 
+    # 2x2 grid — ortala
+    total_w = cw * 2 + mm2px(10)
+    total_h = ch * 2 + mm2px(10)
+    x_start = (A4_W_PX - total_w) // 2
+    y_start = mm2px(25)  # üstten 25mm boşluk
+
+    for idx, cell in enumerate(cells):
+        row, col = divmod(idx, 2)
+        x = x_start + col * (cw + mm2px(10))
+        y = y_start + row * (ch + mm2px(10))
+        sheet[y:y+ch, x:x+cw] = cell
+
+    # Cetvel
+    ruler_y = y_start + total_h + mm2px(8)
+    ruler = make_ruler(total_w)
+    rh = ruler.shape[0]
+    sheet[ruler_y:ruler_y+rh, x_start:x_start+total_w] = ruler
+
+    # Yerleşim şeması
+    diag = make_diagram()
+    dh, dw = diag.shape
+    diag_x = (A4_W_PX - dw) // 2
+    diag_y = ruler_y + rh + mm2px(8)
+    if diag_y + dh < A4_H_PX:
+        sheet[diag_y:diag_y+dh, diag_x:diag_x+dw] = diag
+
+    # Başlık
+    put_centered(sheet, "3D YAZICI KAPLAMA SISTEMI - ARUCO KALIBRASYON MARKERLARI",
+                 A4_W_PX//2, mm2px(10), scale=0.55, thick=1)
+    put_centered(sheet, f"Her marker {MARKER_MM}x{MARKER_MM}mm | Kesik cizgiden kes | Tablaya ID'e gore yapistir",
+                 A4_W_PX//2, mm2px(17), scale=0.38, color=100)
+
+    # Baskı talimatı (alt)
+    put_centered(sheet, "BASKI: Dosyayi ac → Yazdir → Olcek %100 / Gercek Boyut sec",
+                 A4_W_PX//2, A4_H_PX - mm2px(8), scale=0.4, thick=1, color=60)
+
+    return sheet
+
+
+def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Build 4 marker cells
-    cells = [build_marker_cell(i, LABELS[i][0], LABELS[i][1]) for i in range(4)]
+    print("Markerlar üretiliyor…")
+    sheet = build_a4_sheet()
 
-    # Find max cell dimensions and pad all cells to same size
-    max_h = max(c.shape[0] for c in cells)
-    max_w = max(c.shape[1] for c in cells)
-    padded = []
-    for c in cells:
-        ph = max_h - c.shape[0]
-        pw = max_w - c.shape[1]
-        padded.append(np.pad(c, ((0, ph), (0, pw)), constant_values=255))
+    # PNG (DPI metadata gömülü — Preview otomatik boyutu bilir)
+    png_path = os.path.join(OUTPUT_DIR, "aruco_markers.png")
+    pil_img = Image.fromarray(sheet)
+    pil_img.save(png_path, dpi=(DPI, DPI))
+    print(f"✓ PNG kaydedildi: {png_path}")
 
-    # Arrange in 2×2 grid
-    row0 = np.hstack([padded[0], np.ones((max_h, 20), dtype=np.uint8) * 255, padded[1]])
-    row1 = np.hstack([padded[2], np.ones((max_h, 20), dtype=np.uint8) * 255, padded[3]])
-    grid = np.vstack([row0, np.ones((20, row0.shape[1]), dtype=np.uint8) * 255, row1])
+    # PDF (en güvenilir baskı yöntemi)
+    pdf_path = os.path.join(OUTPUT_DIR, "aruco_print.pdf")
+    try:
+        pil_img.save(pdf_path, "PDF", resolution=DPI)
+        print(f"✓ PDF kaydedildi: {pdf_path}")
+    except Exception as e:
+        print(f"  PDF kaydedilemedi ({e}) — PNG kullan")
 
-    # Build placement diagram
-    diagram = build_diagram()
-    # Pad diagram to same width as grid
-    if diagram.shape[1] < grid.shape[1]:
-        pw = grid.shape[1] - diagram.shape[1]
-        diagram = np.pad(diagram, ((0, 0), (pw // 2, pw - pw // 2)), constant_values=255)
-    elif diagram.shape[1] > grid.shape[1]:
-        pw = diagram.shape[1] - grid.shape[1]
-        grid = np.pad(grid, ((0, 0), (pw // 2, pw - pw // 2)), constant_values=255)
-
-    # Header
-    header_h = 80
-    header = np.ones((header_h, grid.shape[1]), dtype=np.uint8) * 255
-    put_text_centered(header, "3D YAZICI KAPLAMA SISTEMI — ARUCO KALIBRASYON MARKERLARI",
-                      grid.shape[1] // 2, 28, scale=0.6, thickness=1)
-    put_text_centered(header, f"300 DPI'da yazdir  |  Her marker {MARKER_MM}x{MARKER_MM} mm  |  Kesip tablanin koselerine yapistir",
-                      grid.shape[1] // 2, 56, scale=0.42, color=80)
-
-    separator = np.ones((30, grid.shape[1]), dtype=np.uint8) * 220
-
-    sheet = np.vstack([header, separator, grid, separator, diagram])
-
-    # Save main sheet
-    out_path = os.path.join(OUTPUT_DIR, "aruco_markers.png")
-    cv2.imwrite(out_path, sheet)
-    print(f"✓ Saved: {out_path}")
-    print(f"  → 300 DPI'da yazdir, marker boyutu otomatik {MARKER_MM}x{MARKER_MM}mm olur")
-
-    # Save individual marker PNGs
-    if args.png:
-        for i in range(4):
-            marker_img = make_marker_image(i)
-            p = os.path.join(OUTPUT_DIR, f"aruco_marker_{i}.png")
-            cv2.imwrite(p, marker_img)
-            print(f"✓ Saved: {p}")
+    # Bireysel marker PNG'leri
+    for i in range(4):
+        m = cv2.aruco.generateImageMarker(ARUCO_DICT, i, MARKER_PX, borderBits=1)
+        p = os.path.join(OUTPUT_DIR, f"aruco_marker_{i}.png")
+        Image.fromarray(m).save(p, dpi=(DPI, DPI))
 
     print()
-    print("Yapilacaklar:")
-    print("  1. output/aruco_markers.png dosyasini yazdir (300 DPI)")
-    print("  2. 4 markeri kes")
-    print("  3. Yazicinin 4 kosesine yapistir (ID'lere gore)")
-    print("  4. Her markerin merkez koordinatini olc (mm) → Ayarlar sayfasina gir")
-    print("  5. Ayarlar → Kalibre Et butonuna bas")
+    print("─" * 50)
+    print("BASKI TALİMATI:")
+    print("  1. output/aruco_print.pdf dosyasını aç")
+    print("  2. Yazdır (Cmd+P)")
+    print("  3. Ölçek → %100 / 'Gerçek Boyut' / 'Actual Size' seç")
+    print("     (macOS Preview'da: Ölçek kutusuna 100 yaz)")
+    print("  4. A4 kağıda bas")
+    print(f"  5. Cetvelle ölç: marker tam {MARKER_MM}mm × {MARKER_MM}mm olmalı")
+    print("  6. Kesik çizgilerden kes, tablaya yapıştır")
+    print("─" * 50)
 
 
 if __name__ == "__main__":
