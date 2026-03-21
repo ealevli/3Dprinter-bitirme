@@ -26,6 +26,7 @@ export default function Settings() {
   const [foundCameras, setFoundCameras] = useState(null);
   const [startGcode, setStartGcode] = useState("");
   const [endGcode, setEndGcode] = useState("");
+  const [pumpTestResult, setPumpTestResult] = useState(null);
 
   useEffect(() => {
     fetchPorts();
@@ -179,6 +180,30 @@ export default function Settings() {
                 </option>
               ))}
             </select>
+            {/* Arduino quick-connect test */}
+            {key === "pump_port" && config.pump_port && (
+              <div className="mt-1 flex items-center gap-2">
+                <button
+                  onClick={async () => {
+                    setPumpTestResult(null);
+                    // Save port first, then connect
+                    await axios.post("/system/config", { pump_port: config.pump_port }).catch(() => {});
+                    const res = await axios.post("/pump/connect").catch((e) => ({ error: e.response?.data?.detail ?? e.message }));
+                    if (res?.error) setPumpTestResult({ ok: false, msg: res.error });
+                    else setPumpTestResult({ ok: true, msg: res.data?.message ?? "Bağlandı!" });
+                    fetchStatus();
+                  }}
+                  className="text-xs px-3 py-1 rounded bg-amber-700 hover:bg-amber-600"
+                >
+                  Bağlan & Test Et
+                </button>
+                {pumpTestResult && (
+                  <span className={`text-xs ${pumpTestResult.ok ? "text-green-400" : "text-red-400"}`}>
+                    {pumpTestResult.ok ? "✓" : "✗"} {pumpTestResult.msg}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         ))}
 

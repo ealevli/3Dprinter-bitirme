@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import axios from "axios";
 
 export default function PumpControls({ onLog }) {
@@ -6,12 +7,20 @@ export default function PumpControls({ onLog }) {
   const [running, setRunning] = useState(false);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [pumpPort, setPumpPort] = useState("");
+  const [connectError, setConnectError] = useState("");
 
   useEffect(() => {
     fetchStatus();
+    fetchPort();
     const interval = setInterval(fetchStatus, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  async function fetchPort() {
+    const res = await axios.get("/system/config").catch(() => null);
+    if (res) setPumpPort(res.data.pump_port ?? "");
+  }
 
   async function fetchStatus() {
     const res = await axios.get("/pump/status").catch(() => null);
@@ -24,15 +33,19 @@ export default function PumpControls({ onLog }) {
 
   async function handleConnect() {
     setConnecting(true);
+    setConnectError("");
     try {
       const res = await axios.post("/pump/connect");
       setConnected(true);
       onLog?.(`✓ ${res.data.message}`);
     } catch (err) {
-      onLog?.(`Arduino bağlantı hatası: ${err.response?.data?.detail ?? err.message}`);
+      const msg = err.response?.data?.detail ?? err.message;
+      setConnectError(msg);
+      onLog?.(`Arduino bağlantı hatası: ${msg}`);
     } finally {
       setConnecting(false);
       fetchStatus();
+      fetchPort();
     }
   }
 
@@ -83,16 +96,45 @@ export default function PumpControls({ onLog }) {
       {/* Not connected state */}
       {!connected && (
         <div className="space-y-2">
-          <p className="text-xs text-slate-400">
-            Ayarlar → Arduino Portu seçin → Kaydedin, ardından bağlanın.
-          </p>
+          {/* Step 1: go to Settings */}
+          <div className="bg-slate-700 rounded p-2 text-xs text-slate-300 space-y-1">
+            <p className="font-medium text-slate-200">Bağlanmak için:</p>
+            <p>
+              1.{" "}
+              <Link to="/ayarlar" className="text-blue-400 underline hover:text-blue-300">
+                Ayarlar
+              </Link>{" "}
+              → Arduino Portunu seç → Kaydet
+            </p>
+            <p>2. Aşağıdaki butona bas</p>
+          </div>
+
+          {/* Show configured port */}
+          {pumpPort ? (
+            <p className="text-xs text-slate-400">
+              Kayıtlı port:{" "}
+              <span className="font-mono text-slate-200">{pumpPort}</span>
+            </p>
+          ) : (
+            <p className="text-xs text-amber-400">
+              ⚠ Port seçilmemiş — önce Ayarlar'a git
+            </p>
+          )}
+
           <button
             onClick={handleConnect}
-            disabled={connecting}
+            disabled={connecting || !pumpPort}
             className="w-full py-1.5 text-sm rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 font-medium"
           >
             {connecting ? "Bağlanıyor…" : "Arduino'ya Bağlan"}
           </button>
+
+          {/* Error feedback */}
+          {connectError && (
+            <p className="text-xs text-red-400 bg-red-950 rounded p-2">
+              {connectError}
+            </p>
+          )}
         </div>
       )}
 
