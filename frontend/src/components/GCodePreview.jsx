@@ -33,8 +33,8 @@ export default function GCodePreview({
     if (!hasData) return;
 
     // ── Compute unified bounding box ─────────────────────────────────────
-    const allX: number[] = [];
-    const allY: number[] = [];
+    const allX = [];
+    const allY = [];
     paths.forEach(p    => { allX.push(p.x); allY.push(p.y); });
     wallPaths.forEach(p => { allX.push(p.x); allY.push(p.y); });
     contourMm.forEach(([x, y]) => { allX.push(x); allY.push(y); });
@@ -60,18 +60,13 @@ export default function GCodePreview({
     const offY  = pad + (H - 2 * pad - drawH) / 2;
 
     /** Printer mm → canvas px  (Y-flipped: printer Y up, canvas Y down) */
-    const tc = (x: number, y: number) => ({
+    const tc = (x, y) => ({
       cx: offX + (x - minX) * scale,
       cy: offY + drawH - (y - minY) * scale,
     });
 
     // ── Helper: stroke an array of {x,y} as a polyline ───────────────────
-    const strokeLine = (
-      pts: { x: number; y: number }[],
-      color: string,
-      width = 1,
-      dash: number[] = [],
-    ) => {
+    const strokeLine = (pts, color, width = 1, dash = []) => {
       if (pts.length < 2) return;
       ctx.strokeStyle = color;
       ctx.lineWidth   = width;
@@ -105,7 +100,7 @@ export default function GCodePreview({
       let segStart = 0;
       const JUMP_PX = scale * 3; // >3 mm jump = travel move
 
-      const flushSeg = (end: number) => {
+      const flushSeg = (end) => {
         if (end - segStart < 1) return;
         ctx.beginPath();
         for (let i = segStart; i <= end; i++) {
