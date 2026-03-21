@@ -66,6 +66,11 @@ async def update_config(updates: dict[str, Any]):
         "camera_index": "CAMERA_INDEX",
     }
 
+    camera_index_changed = (
+        "camera_index" in updates
+        and updates["camera_index"] != config.CAMERA_INDEX
+    )
+
     for key, value in updates.items():
         attr = mapping.get(key)
         if attr:
@@ -74,5 +79,10 @@ async def update_config(updates: dict[str, Any]):
             config.ARUCO_MARKER_POSITIONS_MM = {
                 int(k): tuple(v) for k, v in value.items()
             }
+
+    # If camera index changed, close current camera so it reopens with new index
+    # on the next stream/capture request.
+    if camera_index_changed:
+        camera_service.close()
 
     return {"message": "Ayarlar güncellendi.", "applied": list(updates.keys())}

@@ -18,13 +18,20 @@ export default function CameraFeed({ detectionImage }) {
     setStreamKey(Date.now());
   }, []);
 
-  // If stream errors, wait 3s and auto-retry (up to the user refreshing etc.)
+  // If stream errors, wait 3s and auto-retry.
   useEffect(() => {
     if (status === "error") {
       retryRef.current = setTimeout(reconnect, 3000);
     }
     return () => clearTimeout(retryRef.current);
   }, [status, reconnect]);
+
+  // Listen for camera index changes from Settings page.
+  useEffect(() => {
+    const handler = () => reconnect();
+    window.addEventListener("camera-index-changed", handler);
+    return () => window.removeEventListener("camera-index-changed", handler);
+  }, [reconnect]);
 
   // If we have an annotated detection image, overlay it.
   if (detectionImage) {

@@ -37,6 +37,7 @@ export default function Settings() {
   }
 
   async function handleSave() {
+    const prevIndex = parseInt(localStorage.getItem("camera_index") ?? "0");
     const payload = {
       ...config,
       aruco_marker_positions_mm: Object.fromEntries(
@@ -44,6 +45,12 @@ export default function Settings() {
       ),
     };
     await axios.post("/system/config", payload).catch(() => {});
+    // Persist camera index so Dashboard's CameraFeed can pick up the change.
+    localStorage.setItem("camera_index", config.camera_index);
+    if (config.camera_index !== prevIndex) {
+      // Notify other tabs/components that the camera index changed.
+      window.dispatchEvent(new CustomEvent("camera-index-changed"));
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     fetchStatus();
