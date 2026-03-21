@@ -157,18 +157,39 @@ def detect_part(
         closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    # Filtreler:
-    #   a) Minimum alan (gürültü elendirir)
-    #   b) Maksimum alan: tabladan küçük olmalı (tabla kendisi algılanmasın)
-    #      Tabla alanının %80'inden küçük olanları al
+    # ── Filtreler ────────────────────────────────────────────────────────────
     max_area = bed_area * 0.80 if bed_area < float("inf") else float("inf")
 
-    valid = [
-        c for c in contours
-        if config.MIN_CONTOUR_AREA_PX <= cv2.contourArea(c) <= max_area
-    ]
+    def _score(c) -> float:
+        """
+        Score a contour for 'part-likeness'. Higher = better candidate.
+        Rewards: compact shape, reasonable solidity, square-ish aspect ratio.
+        Penalizes: elongated lines (chalk marks), noise blobs.
+        """
+        area = cv2.contourArea(c)
+        if area < config.MIN_CONTOUR_AREA_PX or area > max_area:
+            return -1.0
 
-    if not valid:
+        x, y, w, h = cv2.boundingRect(c)
+        if w == 0 or h == 0:
+            return -1.0
+
+        # Solidity: how filled vs convex hull (lines score low)
+        hull = cv2.convexHull(c)
+        hull_area = cv2.contourArea(hull)
+        solidity = area / hull_area if hull_area > 0 else 0
+
+        # Aspect ratio: parts tend to be squarish (0.3–3.0 is OK)
+        aspect = max(w, h) / min(w, h)
+        aspect_score = 1.0 if aspect < 2.0 else (0.5 if aspect < 3.5 else 0.0)
+
+        # Prefer larger solid objects
+        return solidity * aspect_score * area
+
+    scored = [(c, _score(c)) for c in contours]
+    scored = [(c, s) for c, s in scored if s > 0]
+
+    if not scored:
         return {
             "contour_px": [],
             "contour_mm": [],
@@ -177,11 +198,11 @@ def detect_part(
             "confidence": None,
             "calibrated": load_calibration() is not None,
             "markers_found": markers_found,
-            "error": "Parça bulunamadı. Parçanın arka plandan yeterince ayrıştığından emin ol.",
+            "error": "Parça bulunamadı. Beyaz kağıt altına koy veya ışığı artır.",
         }
 
-    # En büyük geçerli kontur = parça
-    largest = max(valid, key=cv2.contourArea)
+    # En yüksek skorlu kontur = parça
+    largest = max(scored, key=lambda x: x[1])[0]
     epsilon = 0.005 * cv2.arcLength(largest, True)
     approx = cv2.approxPolyDP(largest, epsilon, True)
 

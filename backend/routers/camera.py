@@ -134,15 +134,45 @@ async def calibrate():
     _ensure_camera()
 
     async with _cam_op_sem:
-        img = camera_service.capture_frame()
-        if img is None:
-            raise HTTPException(status_code=500, detail="Frame alınamadı.")
-
         loop = asyncio.get_event_loop()
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, run_calibration, img),
-            timeout=15.0,
-        )
+
+        def _best_frame_calibrate():
+            """
+            Take up to 5 frames and calibrate with the one where the most
+            ArUco markers are visible. Avoids single-frame bad captures.
+            """
+            import time
+            from services.calibration import detect_markers, compute_homography, save_calibration
+
+            best_frame = None
+            best_count = 0
+
+            for _ in range(5):
+                frame = camera_service.capture_frame()
+                if frame is None:
+                    time.sleep(0.1)
+                    continue
+                markers = detect_markers(frame)
+                if len(markers) > best_count:
+                    best_count = len(markers)
+                    best_frame = frame
+                if best_count >= 4:
+                    break
+                time.sleep(0.15)  # wait for next frame from capture thread
+
+            if best_frame is None:
+                return {"success": False, "matrix": None,
+                        "error": "Kamera frame alınamadı."}
+
+            return run_calibration(best_frame)
+
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, _best_frame_calibrate),
+                timeout=20.0,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Kalibrasyon zaman aşımı.")
 
     if not result["success"]:
         raise HTTPException(status_code=422, detail=result["error"])
