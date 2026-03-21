@@ -104,41 +104,55 @@ export default function Dashboard() {
     }
   }
 
-  // ── Önizle ──────────────────────────────────────────────────────────────
-  async function handlePreview(silent = false) {
-    if (!detection?.contour_px?.length) {
+  // Her zaman güncel değerlere erişmek için ref'ler
+  const paramsRef    = useRef(params);
+  const detectionRef = useRef(detection);
+  const gcodeOpenRef = useRef(!!gcodeResult);
+  paramsRef.current    = params;
+  detectionRef.current = detection;
+  gcodeOpenRef.current = !!gcodeResult;
+
+  // Önizleme üretici — hem manuel hem otomatik çağrı için
+  const generatePreview = useCallback(async (silent = false) => {
+    const det = detectionRef.current;
+    const prm = paramsRef.current;
+    if (!det?.contour_px?.length) {
       if (!silent) addLog("Önce Tara'ya basın.");
       return;
     }
-    if (!detection?.contour_mm?.length) {
-      if (!silent) addLog("⚠️ Kalibrasyon yapılmamış — Ayarlar → Kalibre Et butonuna bas, sonra tekrar Tara + Önizle yap.");
+    if (!det?.contour_mm?.length) {
+      if (!silent) addLog("⚠️ Kalibrasyon gerekli — Ayarlar → Kalibre Et.");
       return;
     }
     try {
-      const start_gcode = localStorage.getItem("cfg_start_gcode") || "";
-      const end_gcode = localStorage.getItem("cfg_end_gcode") || "";
+      const start_gcode = localStorage.getItem("cfg_start_gcode") || undefined;
+      const end_gcode   = localStorage.getItem("cfg_end_gcode")   || undefined;
       const res = await axios.post("/gcode/generate", {
-        contour_mm: detection.contour_mm,
-        ...params,
-        start_gcode: start_gcode || undefined,
-        end_gcode: end_gcode || undefined,
+        contour_mm: det.contour_mm,
+        ...prm,
+        start_gcode,
+        end_gcode,
       });
       setGcodeResult(res.data);
       if (!silent) addLog(
-        `G-code üretildi: ${res.data.line_count} satır, tahmini süre: ${Math.round(res.data.estimated_time_s)}s`
+        `G-code üretildi: ${res.data.line_count} satır, ~${Math.round(res.data.estimated_time_s)}s`
       );
     } catch (err) {
       if (!silent) addLog(`G-code hatası: ${err.response?.data?.detail ?? err.message}`);
     }
-  }
+  }, [addLog]);
 
-  // Parametre değişince önizlemeyi otomatik güncelle (sadece önizleme açıksa)
+  // Manuel "Önizle" butonu
+  const handlePreview = useCallback(() => generatePreview(false), [generatePreview]);
+
+  // Parametre değişince önizlemeyi debounce ile otomatik güncelle
   useEffect(() => {
-    if (gcodeResult && detection?.contour_mm?.length) {
-      handlePreview(true);  // silent=true → log yazmaz
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params]);
+    if (!gcodeOpenRef.current) return;   // önizleme kapalıysa yapma
+    const timer = setTimeout(() => {
+      generatePreview(true);
+    }, 350);                             // 350ms bekle — slider sürüklenirken spam olmasın
+    return () => clearTimeout(timer);
+  }, [params, generatePreview]);
 
   // ── Başlat ──────────────────────────────────────────────────────────────
   async function handleStart() {
