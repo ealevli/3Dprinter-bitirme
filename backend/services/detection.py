@@ -97,48 +97,62 @@ def _find_dark_part_in_roi(
     roi: tuple[int,int,int,int],
 ) -> Optional[np.ndarray]:
     """
-    Find the largest compact DARK object inside the given ROI.
-    Returns the contour (in full-frame coords) or None.
+    Find the most compact DARK object inside the given ROI (bright paper background).
+
+    Uses Otsu thresholding — optimal for bimodal dark-part / white-paper histogram.
+    Falls back to fixed threshold if Otsu fails.
+    Returns the best contour in full-frame coordinates, or None.
     """
     x, y, w, h = roi
     if w <= 0 or h <= 0:
         return None
 
     crop = gray[y:y+h, x:x+w]
+    blurred = cv2.GaussianBlur(crop, (5, 5), 0)
 
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    eq = clahe.apply(crop)
-    blurred = cv2.GaussianBlur(eq, (5, 5), 0)
-
-    # Dark objects on bright background
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        blockSize=21, C=6,
+    # Strategy 1: Otsu — best for bright-bg / dark-object
+    otsu_thresh, t_otsu = cv2.threshold(
+        blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    closed = cv2.morphologyEx(closed, cv2.MORPH_OPEN,
-                              cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
 
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Strategy 2: simple fixed dark threshold (anything darker than 140 = dark)
+    _, t_fixed = cv2.threshold(blurred, 140, 255, cv2.THRESH_BINARY_INV)
+
+    # Combine — any pixel dark by either method
+    combined = cv2.bitwise_or(t_otsu, t_fixed)
+
+    # Clean up noise
+    k5 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, k5)
+    combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN,  k3)
+
+    contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
 
-    # Score: compact + squarish shape
-    best, best_score = None, -1.0
     roi_area = w * h
+    best, best_score = None, -1.0
+
     for c in contours:
         area = cv2.contourArea(c)
-        if area < config.MIN_CONTOUR_AREA_PX or area > roi_area * 0.70:
+        # Must be meaningful size but not fill the whole ROI
+        if area < 500 or area > roi_area * 0.65:
             continue
+
         hull_area = cv2.contourArea(cv2.convexHull(c))
         solidity = area / hull_area if hull_area > 0 else 0
+
         bx, by, bw, bh = cv2.boundingRect(c)
         aspect = max(bw, bh) / max(min(bw, bh), 1)
-        aspect_score = 1.0 if aspect < 2.0 else (0.4 if aspect < 3.5 else 0.0)
-        score = solidity * aspect_score * area
+
+        # Hard reject: very elongated shapes (aspect > 4) are edge artefacts, not parts
+        if aspect > 4.0:
+            continue
+
+        # Score: reward solid + compact + larger
+        aspect_score = 1.0 if aspect < 1.5 else (0.8 if aspect < 2.5 else 0.4)
+        score = (solidity ** 2) * aspect_score * area
         if score > best_score:
             best_score = score
             best = c
@@ -147,8 +161,7 @@ def _find_dark_part_in_roi(
         return None
 
     # Shift contour back to full-frame coordinates
-    best_shifted = best + np.array([[[x, y]]])
-    return best_shifted
+    return best + np.array([[[x, y]]])
 
 
 def _find_part_direct(
