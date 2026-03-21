@@ -91,35 +91,24 @@ export default function GCodePreview({
       strokeLine(wallPaths, "#06b6d4", 1.5);
     }
 
-    // ── 3. Infill — detect travel jumps and draw segments ─────────────────
+    // ── 3. Infill — paths = [start, end, start, end, ...] pairs ──────────
+    // Every 2 consecutive points form one coating line segment.
+    // Draw them all as individual lines (no jump-detection complexity).
     if (paths.length >= 2) {
       ctx.strokeStyle = "#3b82f6";
-      ctx.lineWidth   = 1;
+      ctx.lineWidth   = 1.5;
       ctx.setLineDash([]);
 
-      let segStart = 0;
-      const JUMP_PX = scale * 3; // >3 mm jump = travel move
-
-      const flushSeg = (end) => {
-        if (end - segStart < 1) return;
+      // paths arrive as flat list: [travelPt, coatEndPt, travelPt, coatEndPt…]
+      // Just draw every consecutive pair as a line segment.
+      for (let i = 0; i + 1 < paths.length; i += 2) {
+        const { cx: x1, cy: y1 } = tc(paths[i].x,   paths[i].y);
+        const { cx: x2, cy: y2 } = tc(paths[i+1].x, paths[i+1].y);
         ctx.beginPath();
-        for (let i = segStart; i <= end; i++) {
-          const { cx, cy } = tc(paths[i].x, paths[i].y);
-          i === segStart ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
-        }
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
         ctx.stroke();
-      };
-
-      for (let i = 1; i < paths.length; i++) {
-        const { cx: x1, cy: y1 } = tc(paths[i - 1].x, paths[i - 1].y);
-        const { cx: x2, cy: y2 } = tc(paths[i].x, paths[i].y);
-        const dist = Math.hypot(x2 - x1, y2 - y1);
-        if (dist > JUMP_PX) {
-          flushSeg(i - 1);
-          segStart = i;
-        }
       }
-      flushSeg(paths.length - 1);
     }
 
     // ── 4. Axis labels ────────────────────────────────────────────────────
