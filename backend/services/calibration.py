@@ -110,13 +110,21 @@ def compute_homography(
         real_points = config.ARUCO_MARKER_POSITIONS_MM
 
     common_ids = sorted(set(pixel_points) & set(real_points))
-    if len(common_ids) < 4:
+    if len(common_ids) < 3:
         return None
 
     src = np.array([pixel_points[i] for i in common_ids], dtype=np.float32)
     dst = np.array([real_points[i] for i in common_ids], dtype=np.float32)
 
-    H, _ = cv2.findHomography(src, dst)
+    if len(common_ids) >= 4:
+        # Full perspective homography (most accurate)
+        H, _ = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+    else:
+        # 3 points → affine transform (no perspective correction, still usable)
+        M = cv2.getAffineTransform(src[:3], dst[:3])
+        # Embed 2x3 affine into 3x3 for consistent pixel_to_mm usage
+        H = np.vstack([M, [0, 0, 1]]).astype(np.float64)
+
     return H
 
 
@@ -156,18 +164,25 @@ def run_calibration(frame: np.ndarray) -> dict:
     """
     pixel_pts = detect_markers(frame)
     H = compute_homography(pixel_pts)
+    found = list(pixel_pts.keys())
 
     if H is None:
-        found = list(pixel_pts.keys())
         return {
             "success": False,
             "matrix": None,
-            "error": f"Yeterli marker bulunamadı. Bulunan ID'ler: {found}",
+            "error": f"En az 3 marker gerekli. Bulunan ID'ler: {found}",
         }
+
+    warning = None
+    if len(found) == 3:
+        missing = list(set(range(4)) - set(found))
+        warning = f"Uyarı: Marker {missing[0]} bulunamadı. Affine kalibrasyon kullanıldı (perspektif düzeltme yok). 4 marker ile daha doğru olur."
 
     save_calibration(H)
     return {
         "success": True,
         "matrix": H.tolist(),
+        "markers_found": found,
+        "warning": warning,
         "error": None,
     }

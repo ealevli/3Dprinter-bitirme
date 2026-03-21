@@ -87,7 +87,11 @@ export default function Settings() {
     setCalibResult(null);
     try {
       const res = await axios.post("/camera/calibrate");
-      setCalibResult({ success: true, msg: "Kalibrasyon başarılı." });
+      const d = res.data;
+      const found = d.markers_found ?? [];
+      const base = `Kalibrasyon başarılı! ${found.length}/4 marker (ID: ${found.join(", ")})`;
+      const warn = d.warning ? ` — ⚠️ ${d.warning}` : "";
+      setCalibResult({ success: true, msg: base + warn });
     } catch (err) {
       setCalibResult({
         success: false,
