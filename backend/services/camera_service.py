@@ -36,6 +36,10 @@ class CameraService:
             if not self._cap.isOpened():
                 self._cap = None
                 return False
+            # Discard the first few frames — many cameras produce black frames
+            # while warming up (especially on macOS with AVFoundation).
+            for _ in range(5):
+                self._cap.read()
             self._running = True
             return True
 
