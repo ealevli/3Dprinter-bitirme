@@ -162,6 +162,21 @@ export default function Settings() {
           </button>
         </div>
 
+        {/* Mac driver hint — shown when only virtual ports are visible */}
+        {ports.length > 0 && ports.every(p => p.device.includes("Bluetooth") || p.device.includes("debug")) && (
+          <div className="bg-amber-950 border border-amber-700 rounded p-3 text-xs space-y-1.5">
+            <p className="font-semibold text-amber-300">⚠ Arduino / Yazıcı görünmüyor</p>
+            <p className="text-amber-200">Mac'te CH340 driver kurulu değil. Terminalde çalıştırın:</p>
+            <code className="block bg-slate-900 text-green-300 rounded px-2 py-1.5 select-all">
+              brew install --cask wch-ch34x-usb-serial-driver
+            </code>
+            <p className="text-slate-400">
+              Kurulum sonrası: Sistem Ayarları → Gizlilik & Güvenlik → "WCHUSBSerialDriver" → İzin Ver →
+              Arduino USB&apos;yi çıkar/tak → "Yenile" butonuna bas.
+            </p>
+          </div>
+        )}
+
         {[
           { label: "Yazıcı Portu", key: "printer_port" },
           { label: "Arduino Portu", key: "pump_port" },
