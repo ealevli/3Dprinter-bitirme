@@ -204,9 +204,10 @@ export default function Dashboard() {
                   className="text-xs text-slate-500 hover:text-slate-300"
                 >✕</button>
               </div>
-              <div style={{ height: 220 }}>
+              <div style={{ height: 240 }}>
                 <GCodePreview
-                  paths={gcodeResult.paths}
+                  paths={gcodeResult.paths ?? []}
+                  wallPaths={gcodeResult.wall_paths ?? []}
                   contourMm={detection?.contour_mm ?? []}
                 />
               </div>
