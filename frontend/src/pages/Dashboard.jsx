@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import CameraFeed from "../components/CameraFeed";
 import GCodePreview from "../components/GCodePreview";
 import PumpControls from "../components/PumpControls";
@@ -58,6 +58,15 @@ export default function Dashboard() {
   const [isScanning, setIsScanning] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
+  const previewRef = useRef(null);
+
+  // Auto-scroll to G-code preview when it appears
+  useEffect(() => {
+    if (gcodeResult && previewRef.current) {
+      previewRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [gcodeResult]);
+
   const [params, setParams] = useState({
     line_spacing: 1.0,
     z_offset: 0.3,
@@ -184,8 +193,20 @@ export default function Dashboard() {
           )}
 
           {gcodeResult && (
-            <div className="bg-slate-900 rounded-lg overflow-hidden" style={{ height: 200 }}>
-              <GCodePreview paths={gcodeResult.paths} />
+            <div ref={previewRef} className="bg-slate-900 rounded-lg overflow-hidden border border-slate-700">
+              <div className="flex items-center justify-between px-3 py-1.5 border-b border-slate-700">
+                <span className="text-xs text-slate-400 font-medium">
+                  G-code Önizleme — {gcodeResult.line_count} satır
+                  {gcodeResult.estimated_time_s > 0 && ` · ~${Math.round(gcodeResult.estimated_time_s)}s`}
+                </span>
+                <button
+                  onClick={() => setGcodeResult(null)}
+                  className="text-xs text-slate-500 hover:text-slate-300"
+                >✕</button>
+              </div>
+              <div style={{ height: 180 }}>
+                <GCodePreview paths={gcodeResult.paths} />
+              </div>
             </div>
           )}
 

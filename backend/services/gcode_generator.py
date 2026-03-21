@@ -58,11 +58,14 @@ def _generate_zigzag(poly: Polygon, params: CoatingParams) -> list[str]:
         clipped = poly.intersection(scan)
 
         if not clipped.is_empty:
-            segments = (
-                [clipped]
-                if clipped.geom_type == "LineString"
-                else list(clipped.geoms)
-            )
+            # intersection can return Point / MultiPoint / GeometryCollection —
+            # only process LineString segments
+            if clipped.geom_type == "LineString":
+                segments = [clipped]
+            elif hasattr(clipped, "geoms"):
+                segments = list(clipped.geoms)
+            else:
+                segments = []
             for seg in segments:
                 if seg.geom_type != "LineString":
                     continue
