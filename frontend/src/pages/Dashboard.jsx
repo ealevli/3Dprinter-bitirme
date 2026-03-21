@@ -5,6 +5,52 @@ import PumpControls from "../components/PumpControls";
 import CoatingParams from "../components/CoatingParams";
 import axios from "axios";
 
+/** Shows detected part dimensions below the camera feed. */
+function DetectionInfo({ detection }) {
+  const { bbox, contour_mm, contour_px, calibrated, method, markers_found } = detection;
+
+  // Pixel dimensions from bbox
+  const [, , bw, bh] = bbox ?? [0, 0, 0, 0];
+
+  // mm dimensions from contour_mm bounding box
+  let mmW = null, mmH = null;
+  if (contour_mm?.length) {
+    const xs = contour_mm.map((p) => p[0]);
+    const ys = contour_mm.map((p) => p[1]);
+    mmW = (Math.max(...xs) - Math.min(...xs)).toFixed(1);
+    mmH = (Math.max(...ys) - Math.min(...ys)).toFixed(1);
+  }
+
+  const Chip = ({ label, value, color = "text-slate-300" }) => (
+    <span>
+      <span className="text-slate-500">{label}: </span>
+      <span className={`font-mono font-semibold ${color}`}>{value}</span>
+    </span>
+  );
+
+  return (
+    <>
+      {mmW && mmH ? (
+        <Chip label="Boyut" value={`${mmW} × ${mmH} mm`} color="text-green-400" />
+      ) : (
+        <Chip label="Boyut (px)" value={`${bw} × ${bh} px`} color="text-amber-400" />
+      )}
+      <Chip label="Kontur" value={`${contour_px?.length ?? 0} nokta`} />
+      <Chip
+        label="Marker"
+        value={`${markers_found ?? 0}/4`}
+        color={markers_found >= 4 ? "text-green-400" : markers_found > 0 ? "text-amber-400" : "text-red-400"}
+      />
+      <Chip
+        label="Kalibrasyon"
+        value={calibrated ? "✓" : "✗ Gerekli"}
+        color={calibrated ? "text-green-400" : "text-red-400"}
+      />
+      <Chip label="Yöntem" value={method ?? "-"} color="text-cyan-400" />
+    </>
+  );
+}
+
 export default function Dashboard() {
   const [logs, setLogs] = useState([]);
   const [detection, setDetection] = useState(null);
@@ -51,8 +97,12 @@ export default function Dashboard() {
 
   // ── Önizle ──────────────────────────────────────────────────────────────
   async function handlePreview() {
+    if (!detection?.contour_px?.length) {
+      addLog("Önce Tara'ya basın.");
+      return;
+    }
     if (!detection?.contour_mm?.length) {
-      addLog("Önce tarama yapın.");
+      addLog("⚠️ Kalibrasyon yapılmamış — Ayarlar → Kalibre Et butonuna bas, sonra tekrar Tara + Önizle yap.");
       return;
     }
     try {
@@ -126,6 +176,13 @@ export default function Dashboard() {
             />
           </div>
 
+          {/* Detection info panel */}
+          {detection?.bbox && (
+            <div className="bg-slate-800 rounded-lg px-4 py-2 flex flex-wrap gap-x-6 gap-y-1 text-xs">
+              <DetectionInfo detection={detection} />
+            </div>
+          )}
+
           {gcodeResult && (
             <div className="bg-slate-900 rounded-lg overflow-hidden" style={{ height: 200 }}>
               <GCodePreview paths={gcodeResult.paths} />
@@ -143,7 +200,8 @@ export default function Dashboard() {
             </button>
             <button
               onClick={handlePreview}
-              disabled={!detection?.contour_mm?.length}
+              disabled={!detection?.contour_px?.length}
+              title={!detection?.calibrated ? "Kalibrasyon yapılmamış — mm koordinatı yok, piksel koordinatıyla devam edilecek" : ""}
               className="flex-1 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-semibold text-sm"
             >
               Önizle
