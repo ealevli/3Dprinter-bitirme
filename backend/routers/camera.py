@@ -9,7 +9,7 @@ Endpoints:
 
 import base64
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -37,6 +37,24 @@ async def stream():
     return StreamingResponse(
         camera_service.mjpeg_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@router.get("/frame")
+async def frame():
+    """Return the latest camera frame as a raw JPEG (no base64).
+    Frontend polls this endpoint every ~100ms instead of using MJPEG stream.
+    Much more robust — each request is independent, no persistent connection to freeze.
+    """
+    _ensure_camera()
+    img = camera_service.capture_frame()
+    if img is None:
+        raise HTTPException(status_code=503, detail="Frame yok.")
+    jpeg = camera_service.frame_to_jpeg(img)
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
     )
 
 

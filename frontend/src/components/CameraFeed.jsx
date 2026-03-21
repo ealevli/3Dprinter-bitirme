@@ -1,36 +1,74 @@
 /**
- * CameraFeed — displays the live MJPEG stream from the backend.
- * Auto-reconnects on error. Shows annotated detection image when provided.
+ * CameraFeed — polls /camera/frame every 100ms instead of using MJPEG.
+ * Each request is independent, so a slow frame never freezes the whole feed.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+
+const POLL_MS = 100; // ~10 fps — smooth enough, low CPU
+const ERROR_RETRY_MS = 2000;
 
 export default function CameraFeed({ detectionImage }) {
-  const [streamKey, setStreamKey] = useState(Date.now());
-  const [hasError, setHasError] = useState(false);
-  const retryRef = useRef(null);
+  const imgRef = useRef(null);
+  const timerRef = useRef(null);
+  const activeRef = useRef(true);
+  const [error, setError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
-  const reconnect = useCallback(() => {
-    setHasError(false);
-    setStreamKey(Date.now());
+  const poll = useCallback(() => {
+    if (!activeRef.current) return;
+    const url = `/camera/frame?t=${Date.now()}`;
+    fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (!activeRef.current) return;
+        const objectUrl = URL.createObjectURL(blob);
+        if (imgRef.current) {
+          const old = imgRef.current.src;
+          imgRef.current.src = objectUrl;
+          // Revoke the previous object URL to free memory
+          if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
+        }
+        setError(false);
+        timerRef.current = setTimeout(poll, POLL_MS);
+      })
+      .catch((err) => {
+        if (!activeRef.current) return;
+        setError(true);
+        setErrorMsg(err.message);
+        timerRef.current = setTimeout(poll, ERROR_RETRY_MS);
+      });
   }, []);
 
-  // Auto-retry 3s after error
   useEffect(() => {
-    if (hasError) {
-      retryRef.current = setTimeout(reconnect, 3000);
-    }
-    return () => clearTimeout(retryRef.current);
-  }, [hasError, reconnect]);
+    activeRef.current = true;
+    setError(false);
+    timerRef.current = setTimeout(poll, 50);
+    return () => {
+      activeRef.current = false;
+      clearTimeout(timerRef.current);
+      // Revoke current blob URL on unmount
+      if (imgRef.current?.src?.startsWith("blob:")) {
+        URL.revokeObjectURL(imgRef.current.src);
+      }
+    };
+  }, [poll]);
 
-  // Listen for camera index change from Settings
+  // Camera index changed from Settings → restart polling
   useEffect(() => {
-    const handler = () => reconnect();
+    const handler = () => {
+      clearTimeout(timerRef.current);
+      setError(false);
+      timerRef.current = setTimeout(poll, 300);
+    };
     window.addEventListener("camera-index-changed", handler);
     return () => window.removeEventListener("camera-index-changed", handler);
-  }, [reconnect]);
+  }, [poll]);
 
-  // Show annotated detection image
+  // Show annotated detection image overlay
   if (detectionImage) {
     return (
       <div className="relative w-full h-full">
@@ -40,7 +78,9 @@ export default function CameraFeed({ detectionImage }) {
           className="w-full h-full object-contain"
         />
         <button
-          onClick={reconnect}
+          onClick={() => {
+            /* parent clears detectionImage — nothing to do here */
+          }}
           className="absolute top-2 right-2 text-xs bg-black/50 hover:bg-black/80 text-white px-2 py-1 rounded"
         >
           Canlıya dön
@@ -49,34 +89,24 @@ export default function CameraFeed({ detectionImage }) {
     );
   }
 
-  if (hasError) {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-3">
-        <span className="text-3xl">📷</span>
-        <span>Kamera bağlantısı kesildi</span>
-        <span className="text-xs text-slate-500">3 saniyede yeniden deniyor…</span>
-        <button
-          onClick={reconnect}
-          className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded"
-        >
-          Hemen Yenile
-        </button>
-        <span className="text-xs text-slate-600">
-          Sorun devam ederse Ayarlar → Kamera İndeksi kontrol et
-        </span>
-      </div>
-    );
-  }
-
-  // Just show the stream — no opacity trick, no connecting overlay.
-  // onError fires if the backend returns non-2xx or connection drops.
   return (
-    <img
-      key={streamKey}
-      src={`/camera/stream?t=${streamKey}`}
-      alt="Canlı Kamera"
-      className="w-full h-full object-contain"
-      onError={() => setHasError(true)}
-    />
+    <div className="relative w-full h-full">
+      {/* Live feed */}
+      <img
+        ref={imgRef}
+        alt="Canlı Kamera"
+        className="w-full h-full object-contain"
+      />
+
+      {/* Error overlay */}
+      {error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-slate-300 text-sm gap-2">
+          <span className="text-2xl">📷</span>
+          <span>Kamera bağlanamadı</span>
+          <span className="text-xs text-slate-500">{errorMsg} — yeniden deneniyor…</span>
+          <span className="text-xs text-slate-600">Ayarlar → Kamera İndeksi kontrol et</span>
+        </div>
+      )}
+    </div>
   );
 }
