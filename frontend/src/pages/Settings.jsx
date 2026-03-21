@@ -3,7 +3,9 @@ import axios from "axios";
 
 export default function Settings() {
   const [ports, setPorts] = useState([]);
-  const [status, setStatus] = useState(null);
+  const [status, setStatus] = useState({
+    camera: "...", printer: "...", pump: "...", calibration: "...",
+  });
   const [config, setConfig] = useState({
     printer_port: "",
     printer_baudrate: 115200,
@@ -55,6 +57,7 @@ export default function Settings() {
   async function fetchStatus() {
     const res = await axios.get("/system/status").catch(() => null);
     if (res) setStatus(res.data);
+    else setStatus({ camera: "hata", printer: "hata", pump: "hata", calibration: "hata" });
   }
 
   async function handleSave() {
@@ -111,18 +114,19 @@ export default function Settings() {
     <div className="max-w-2xl mx-auto space-y-6">
       <h1 className="text-xl font-bold">Ayarlar</h1>
 
-      {/* Connection status */}
-      {status && (
-        <div className="bg-slate-800 rounded-lg p-4 space-y-2">
-          <h2 className="font-semibold text-sm text-slate-300 mb-3">Bağlantı Durumu</h2>
-          {Object.entries(status).map(([k, v]) => (
-            <div key={k} className="flex items-center justify-between text-sm">
-              <span className="capitalize text-slate-400">{k}</span>
-              <StatusBadge value={v} />
-            </div>
-          ))}
+      {/* Connection status — always visible */}
+      <div className="bg-slate-800 rounded-lg p-4 space-y-2">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-sm text-slate-300">Bağlantı Durumu</h2>
+          <button onClick={fetchStatus} className="text-xs text-slate-400 hover:text-white">Yenile</button>
         </div>
-      )}
+        {Object.entries(status).map(([k, v]) => (
+          <div key={k} className="flex items-center justify-between text-sm">
+            <span className="capitalize text-slate-400">{k}</span>
+            <StatusBadge value={v} />
+          </div>
+        ))}
+      </div>
 
       {/* Serial ports */}
       <div className="bg-slate-800 rounded-lg p-4 space-y-4">
