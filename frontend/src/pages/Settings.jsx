@@ -24,11 +24,14 @@ export default function Settings() {
   const [calibResult, setCalibResult] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [foundCameras, setFoundCameras] = useState(null);
+  const [startGcode, setStartGcode] = useState("");
+  const [endGcode, setEndGcode] = useState("");
 
   useEffect(() => {
     fetchPorts();
     fetchStatus();
     fetchConfig();
+    fetchGcodeDefaults();
   }, []);
 
   async function fetchConfig() {
@@ -49,6 +52,16 @@ export default function Settings() {
         )
       );
     }
+    if (d.start_gcode) setStartGcode(d.start_gcode);
+    if (d.end_gcode) setEndGcode(d.end_gcode);
+  }
+
+  async function fetchGcodeDefaults() {
+    const res = await axios.get("/gcode/defaults").catch(() => null);
+    if (!res) return;
+    // Only set defaults if not already loaded from config
+    setStartGcode((prev) => prev || res.data.start_gcode);
+    setEndGcode((prev) => prev || res.data.end_gcode);
   }
 
   async function fetchPorts() {
@@ -69,10 +82,15 @@ export default function Settings() {
       aruco_marker_positions_mm: Object.fromEntries(
         Object.entries(markerPositions).map(([k, v]) => [k, v])
       ),
+      start_gcode: startGcode,
+      end_gcode: endGcode,
     };
     await axios.post("/system/config", payload).catch(() => {});
     // Persist camera index so Dashboard's CameraFeed can pick up the change.
     localStorage.setItem("camera_index", config.camera_index);
+    // Persist G-code sequences for Dashboard to pick up.
+    localStorage.setItem("cfg_start_gcode", startGcode);
+    localStorage.setItem("cfg_end_gcode", endGcode);
     if (config.camera_index !== prevIndex) {
       // Notify other tabs/components that the camera index changed.
       window.dispatchEvent(new CustomEvent("camera-index-changed"));
@@ -283,6 +301,39 @@ export default function Settings() {
             {calibResult.msg}
           </p>
         )}
+      </div>
+
+      {/* G-code sequences */}
+      <div className="bg-slate-800 rounded-lg p-4 space-y-4">
+        <h2 className="font-semibold text-sm text-slate-300">Yazıcı G-code Sekansları</h2>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Başlangıç Kodu</label>
+          <textarea
+            value={startGcode}
+            onChange={(e) => setStartGcode(e.target.value)}
+            rows={8}
+            spellCheck={false}
+            className="w-full bg-slate-900 text-slate-100 rounded px-3 py-2 text-xs font-mono resize-y border border-slate-700 focus:outline-none focus:border-slate-500"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Kullanılabilir değişkenler: {"{part_x}"} {"{part_y}"} {"{z_coat}"} {"{z_travel}"} {"{travel_rate}"} {"{feed_rate}"}
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Bitiş Kodu</label>
+          <textarea
+            value={endGcode}
+            onChange={(e) => setEndGcode(e.target.value)}
+            rows={8}
+            spellCheck={false}
+            className="w-full bg-slate-900 text-slate-100 rounded px-3 py-2 text-xs font-mono resize-y border border-slate-700 focus:outline-none focus:border-slate-500"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Kullanılabilir değişkenler: {"{part_x}"} {"{part_y}"} {"{z_coat}"} {"{z_travel}"} {"{z_travel_end}"} {"{travel_rate}"} {"{feed_rate}"}
+          </p>
+        </div>
       </div>
 
       {/* Save */}

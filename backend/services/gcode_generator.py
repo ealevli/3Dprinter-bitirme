@@ -1,7 +1,7 @@
 """
 G-code generator — Cura-style coating path.
 
-Structure (same as Cura):
+Structure (single layer):
   1. Start sequence  (home, lift, move to start)
   2. WALL-OUTER      (trace part perimeter once)
   3. INFILL          (zigzag / parallel / spiral clipped to polygon)
@@ -9,6 +9,15 @@ Structure (same as Cura):
 
 No extrusion (E) commands — pump is controlled separately via Arduino.
 No temperature commands — heater not connected.
+
+Start and end G-code sequences are configurable via DEFAULT_START_GCODE and
+DEFAULT_END_GCODE constants. Placeholders are replaced at generation time:
+  {part_x}, {part_y}   — first contour point (mm)
+  {z_coat}             — coating Z level (mm)
+  {z_travel}           — travel Z level (mm)
+  {z_travel_end}       — end travel Z level (z_travel + 10 mm)
+  {feed_rate}          — coating feed rate (mm/min)
+  {travel_rate}        — rapid travel rate (mm/min)
 """
 
 from __future__ import annotations
@@ -20,6 +29,19 @@ from typing import Literal
 from shapely.geometry import LineString, Polygon
 
 PatternType = Literal["zigzag", "parallel", "spiral"]
+
+# ── Default G-code sequences ──────────────────────────────────────────────────
+
+DEFAULT_START_GCODE = """\
+G28 ; Eksenleri sifirla
+G90 ; Mutlak konum modu
+G0 F{travel_rate} Z{z_travel} ; Nozzle'i kaldir
+G0 F{travel_rate} X{part_x} Y{part_y} ; Parca konumuna git"""
+
+DEFAULT_END_GCODE = """\
+G0 F300 Z{z_travel_end} ; Nozzle'i yukari kaldir
+G0 F{travel_rate} X0 Y220 ; Park pozisyonu
+M84 X Y E ; Motorlari devre disi birak (Z hariç)"""
 
 
 @dataclass
@@ -193,9 +215,19 @@ def _spiral_lines(poly: Polygon, p: CoatingParams) -> list[str]:
 def generate_gcode(
     contour_mm: list[list[float]],
     params: CoatingParams | None = None,
+    start_gcode: str | None = None,
+    end_gcode: str | None = None,
 ) -> dict:
     """
     Generate coating G-code from a part contour (mm coordinates).
+
+    Args:
+        contour_mm  : Part outline in printer mm coordinates.
+        params      : Coating parameters. Defaults to CoatingParams().
+        start_gcode : Custom start sequence with placeholders. Uses
+                      DEFAULT_START_GCODE when None.
+        end_gcode   : Custom end sequence with placeholders. Uses
+                      DEFAULT_END_GCODE when None.
 
     Returns:
         gcode          : str   — complete G-code program
@@ -206,6 +238,10 @@ def generate_gcode(
     """
     if params is None:
         params = CoatingParams()
+    if start_gcode is None:
+        start_gcode = DEFAULT_START_GCODE
+    if end_gcode is None:
+        end_gcode = DEFAULT_END_GCODE
 
     # Build Shapely polygon
     poly = Polygon([(pt[0], pt[1]) for pt in contour_mm])
@@ -222,21 +258,44 @@ def generate_gcode(
 
     zt = _z_travel(params)
     zc = _z_coat(params)
-    cx_start, cy_start = list(poly.exterior.coords)[0]
+
+    # Compute part_x, part_y from first contour point (or centroid as fallback)
+    if contour_mm:
+        part_x, part_y = contour_mm[0][0], contour_mm[0][1]
+    else:
+        c = poly.centroid
+        part_x, part_y = c.x, c.y
+
+    z_travel_end = round(zt + 10.0, 3)
+
+    # Build placeholder mapping
+    placeholders = {
+        "part_x":      f"{part_x:.3f}",
+        "part_y":      f"{part_y:.3f}",
+        "z_coat":      f"{zc:.3f}",
+        "z_travel":    f"{zt:.3f}",
+        "z_travel_end": f"{z_travel_end:.3f}",
+        "feed_rate":   str(params.feed_rate),
+        "travel_rate": str(params.travel_rate),
+    }
+
+    def _fill_placeholders(template: str) -> str:
+        result = template
+        for key, value in placeholders.items():
+            result = result.replace("{" + key + "}", value)
+        return result
 
     # ── Header ────────────────────────────────────────────────────────────────
-    header = [
+    meta_lines = [
         "; === 3D Printer Coating System — Auto-generated G-code ===",
         f"; Pattern   : {params.pattern_type}",
         f"; Spacing   : {params.line_spacing} mm",
         f"; Z coating : {zc} mm  (tape {params.band_thickness} + offset {params.z_offset})",
         f"; Feed      : {params.feed_rate} mm/min",
         "; ---",
-        "G28",                                          # home all axes
-        "G90",                                          # absolute mode
-        f"G0 F{params.travel_rate} Z{zt:.3f}",         # lift
-        f"G0 F{params.travel_rate} X{cx_start:.3f} Y{cy_start:.3f}",  # move to part
     ]
+    start_lines = _fill_placeholders(start_gcode).splitlines()
+    header = meta_lines + start_lines
 
     # ── Wall ──────────────────────────────────────────────────────────────────
     wall = _wall_lines(poly, params)
@@ -250,13 +309,8 @@ def generate_gcode(
         fill = _zigzag_lines(poly, params)
 
     # ── Footer ────────────────────────────────────────────────────────────────
-    footer = [
-        "; --- End ---",
-        f"G0 F300 Z{zt + 10:.3f}",      # raise nozzle high
-        "G0 X0 Y220",                    # park (front of bed, like Cura)
-        "M84 X Y E",                     # disable steppers (keep Z)
-        "; === End of coating program ===",
-    ]
+    end_lines = _fill_placeholders(end_gcode).splitlines()
+    footer = ["; --- End ---"] + end_lines + ["; === End of coating program ==="]
 
     all_lines = header + wall + fill + footer
     gcode_str = "\n".join(all_lines)

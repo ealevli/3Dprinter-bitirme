@@ -115,9 +115,13 @@ export default function Dashboard() {
       return;
     }
     try {
+      const start_gcode = localStorage.getItem("cfg_start_gcode") || "";
+      const end_gcode = localStorage.getItem("cfg_end_gcode") || "";
       const res = await axios.post("/gcode/generate", {
         contour_mm: detection.contour_mm,
         ...params,
+        start_gcode: start_gcode || undefined,
+        end_gcode: end_gcode || undefined,
       });
       setGcodeResult(res.data);
       addLog(

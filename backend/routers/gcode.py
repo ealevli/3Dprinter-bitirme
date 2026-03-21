@@ -15,7 +15,12 @@ from pydantic import BaseModel
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from services.gcode_generator import generate_gcode, CoatingParams
+from services.gcode_generator import (
+    generate_gcode,
+    CoatingParams,
+    DEFAULT_START_GCODE,
+    DEFAULT_END_GCODE,
+)
 from services.printer_serial import printer_serial
 
 router = APIRouter()
@@ -29,10 +34,21 @@ class GenerateRequest(BaseModel):
     travel_rate: int = 1500
     band_thickness: float = 1.0
     pattern_type: str = "zigzag"
+    start_gcode: str | None = None
+    end_gcode: str | None = None
 
 
 class SendRequest(BaseModel):
     gcode: str
+
+
+@router.get("/defaults")
+async def get_defaults():
+    """Return the default start and end G-code sequences."""
+    return {
+        "start_gcode": DEFAULT_START_GCODE,
+        "end_gcode": DEFAULT_END_GCODE,
+    }
 
 
 @router.post("/generate")
@@ -48,7 +64,7 @@ async def generate(req: GenerateRequest):
         band_thickness=req.band_thickness,
         pattern_type=req.pattern_type,  # type: ignore[arg-type]
     )
-    return generate_gcode(req.contour_mm, params)
+    return generate_gcode(req.contour_mm, params, req.start_gcode, req.end_gcode)
 
 
 @router.post("/preview")
