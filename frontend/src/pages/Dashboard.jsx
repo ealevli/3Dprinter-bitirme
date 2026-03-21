@@ -105,13 +105,13 @@ export default function Dashboard() {
   }
 
   // ── Önizle ──────────────────────────────────────────────────────────────
-  async function handlePreview() {
+  async function handlePreview(silent = false) {
     if (!detection?.contour_px?.length) {
-      addLog("Önce Tara'ya basın.");
+      if (!silent) addLog("Önce Tara'ya basın.");
       return;
     }
     if (!detection?.contour_mm?.length) {
-      addLog("⚠️ Kalibrasyon yapılmamış — Ayarlar → Kalibre Et butonuna bas, sonra tekrar Tara + Önizle yap.");
+      if (!silent) addLog("⚠️ Kalibrasyon yapılmamış — Ayarlar → Kalibre Et butonuna bas, sonra tekrar Tara + Önizle yap.");
       return;
     }
     try {
@@ -124,13 +124,21 @@ export default function Dashboard() {
         end_gcode: end_gcode || undefined,
       });
       setGcodeResult(res.data);
-      addLog(
+      if (!silent) addLog(
         `G-code üretildi: ${res.data.line_count} satır, tahmini süre: ${Math.round(res.data.estimated_time_s)}s`
       );
     } catch (err) {
-      addLog(`G-code hatası: ${err.response?.data?.detail ?? err.message}`);
+      if (!silent) addLog(`G-code hatası: ${err.response?.data?.detail ?? err.message}`);
     }
   }
+
+  // Parametre değişince önizlemeyi otomatik güncelle (sadece önizleme açıksa)
+  useEffect(() => {
+    if (gcodeResult && detection?.contour_mm?.length) {
+      handlePreview(true);  // silent=true → log yazmaz
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   // ── Başlat ──────────────────────────────────────────────────────────────
   async function handleStart() {
