@@ -3,20 +3,30 @@ Camera router.
 
 Endpoints:
   GET  /camera/stream     → MJPEG video stream
+  GET  /camera/frame      → single JPEG (polled by frontend)
   POST /camera/capture    → single JPEG frame (base64)
+  GET  /camera/scan       → find available camera indices
   POST /camera/calibrate  → ArUco calibration
 """
 
+import asyncio
 import base64
+import os
+import sys
+
+import cv2
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, StreamingResponse
 
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from services.camera_service import camera_service
+import config
+from services.camera_service import camera_service, _BACKEND
 from services.calibration import run_calibration
 
 router = APIRouter()
+
+# Scan and calibrate share this semaphore — only one heavy camera op at a time.
+_cam_op_sem = asyncio.Semaphore(1)
 
 
 def _ensure_camera() -> None:
@@ -32,7 +42,7 @@ def _ensure_camera() -> None:
 
 @router.get("/stream")
 async def stream():
-    """MJPEG stream — use as <img src='/camera/stream'> in the frontend."""
+    """MJPEG stream."""
     _ensure_camera()
     return StreamingResponse(
         camera_service.mjpeg_generator(),
@@ -42,10 +52,7 @@ async def stream():
 
 @router.get("/frame")
 async def frame():
-    """Return the latest camera frame as a raw JPEG (no base64).
-    Frontend polls this endpoint every ~100ms instead of using MJPEG stream.
-    Much more robust — each request is independent, no persistent connection to freeze.
-    """
+    """Return the latest camera frame as a raw JPEG (polled by frontend)."""
     _ensure_camera()
     img = camera_service.capture_frame()
     if img is None:
@@ -62,10 +69,10 @@ async def frame():
 async def capture():
     """Capture a single frame and return it as a base64-encoded JPEG."""
     _ensure_camera()
-    frame = camera_service.capture_frame()
-    if frame is None:
+    img = camera_service.capture_frame()
+    if img is None:
         raise HTTPException(status_code=500, detail="Frame alınamadı.")
-    jpeg = camera_service.frame_to_jpeg(frame)
+    jpeg = camera_service.frame_to_jpeg(img)
     encoded = base64.b64encode(jpeg).decode()
     return {"image": encoded, "format": "jpeg"}
 
@@ -73,35 +80,70 @@ async def capture():
 @router.get("/scan")
 async def scan_cameras():
     """
-    Scan camera indices 0-7 and return which ones are accessible.
-    Runs in a thread executor to avoid blocking the event loop.
+    Scan camera indices 0–7 and report which are available.
+
+    Key safety rules:
+    - The currently open camera index is reported as available WITHOUT
+      reopening it (avoids crashing the live feed on macOS AVFoundation).
+    - Other indices are tested one at a time in a thread executor.
+    - Indices beyond the OS limit are skipped immediately (no trial open).
     """
-    import asyncio
-    import cv2 as _cv2
+    if _cam_op_sem.locked():
+        raise HTTPException(status_code=429, detail="Başka bir kamera işlemi çalışıyor.")
 
-    def _scan():
-        found = []
+    active_index = config.CAMERA_INDEX  # currently configured index
+
+    def _probe(idx: int) -> dict:
+        """Try to open one camera index and read a frame. Must be brief."""
+        # Don't touch the already-open camera — report it based on service state.
+        if idx == active_index and camera_service.is_open:
+            frame = camera_service.capture_frame()
+            return {"index": idx, "readable": frame is not None, "active": True}
+
+        # Temporarily open with explicit backend to avoid triggering FFMPEG warnings.
+        cap = cv2.VideoCapture(idx, _BACKEND)
+        if not cap.isOpened():
+            cap.release()
+            return {"index": idx, "readable": False, "active": False}
+        ret, _ = cap.read()
+        cap.release()
+        return {"index": idx, "readable": ret, "active": False}
+
+    async with _cam_op_sem:
+        loop = asyncio.get_event_loop()
+        results = []
         for i in range(8):
-            cap = _cv2.VideoCapture(i)
-            if cap.isOpened():
-                ret, _ = cap.read()
-                found.append({"index": i, "readable": ret})
-                cap.release()
-        return found
+            info = await loop.run_in_executor(None, _probe, i)
+            # Stop scanning once we hit two consecutive unopenable indices
+            # (avoids triggering AVFoundation errors for non-existent devices)
+            if not info["readable"] and not info["active"]:
+                # Check one more before giving up
+                if i > 0 and not results[-1]["readable"] and not results[-1].get("active"):
+                    break
+            results.append(info)
 
-    loop = asyncio.get_event_loop()
-    cameras = await loop.run_in_executor(None, _scan)
-    return {"cameras": cameras}
+        return {"cameras": [r for r in results if r["readable"] or r["active"]]}
 
 
 @router.post("/calibrate")
 async def calibrate():
     """Run ArUco calibration on the current camera frame."""
+    if _cam_op_sem.locked():
+        raise HTTPException(status_code=429, detail="Başka bir kamera işlemi çalışıyor.")
+
     _ensure_camera()
-    frame = camera_service.capture_frame()
-    if frame is None:
-        raise HTTPException(status_code=500, detail="Frame alınamadı.")
-    result = run_calibration(frame)
+
+    async with _cam_op_sem:
+        img = camera_service.capture_frame()
+        if img is None:
+            raise HTTPException(status_code=500, detail="Frame alınamadı.")
+
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, run_calibration, img),
+            timeout=15.0,
+        )
+
     if not result["success"]:
         raise HTTPException(status_code=422, detail=result["error"])
     return result
