@@ -101,4 +101,7 @@ async def update_config(updates: dict[str, Any]):
     if camera_index_changed:
         camera_service.close()
 
+    # Persist to disk so settings survive server restarts
+    config.save_user_config()
+
     return {"message": "Ayarlar güncellendi.", "applied": list(updates.keys())}

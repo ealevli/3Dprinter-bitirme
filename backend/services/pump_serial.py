@@ -30,8 +30,13 @@ class PumpSerial:
 
     # ── Connection ────────────────────────────────────────────────────────────
 
-    def connect(self, port: str = config.PUMP_PORT, baudrate: int = config.PUMP_BAUDRATE) -> bool:
+    def connect(self, port: str = None, baudrate: int = None) -> bool:
         """Open serial connection to the Arduino. Returns True on success."""
+        # Read config at call-time so runtime updates via /system/config are picked up
+        if port is None:
+            port = config.PUMP_PORT
+        if baudrate is None:
+            baudrate = config.PUMP_BAUDRATE
         with self._lock:
             if self._ser and self._ser.is_open:
                 return True
@@ -39,7 +44,7 @@ class PumpSerial:
                 self._ser = serial.Serial(port, baudrate, timeout=5)
                 time.sleep(1.5)         # Arduino resets on serial open
                 return True
-            except serial.SerialException:
+            except serial.SerialException as e:
                 self._ser = None
                 return False
 

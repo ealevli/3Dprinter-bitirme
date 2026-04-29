@@ -195,23 +195,26 @@ export default function Settings() {
                 </option>
               ))}
             </select>
-            {/* Arduino quick-connect test */}
-            {key === "pump_port" && config.pump_port && (
-              <div className="mt-1 flex items-center gap-2">
+            {/* Arduino quick-connect test — always visible for pump port */}
+            {key === "pump_port" && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
                 <button
+                  disabled={!config.pump_port}
                   onClick={async () => {
                     setPumpTestResult(null);
-                    // Save port first, then connect
                     await axios.post("/system/config", { pump_port: config.pump_port }).catch(() => {});
                     const res = await axios.post("/pump/connect").catch((e) => ({ error: e.response?.data?.detail ?? e.message }));
                     if (res?.error) setPumpTestResult({ ok: false, msg: res.error });
                     else setPumpTestResult({ ok: true, msg: res.data?.message ?? "Bağlandı!" });
                     fetchStatus();
                   }}
-                  className="text-xs px-3 py-1 rounded bg-amber-700 hover:bg-amber-600"
+                  className="text-xs px-3 py-1.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Bağlan & Test Et
+                  Arduino'ya Bağlan & Test Et
                 </button>
+                {!config.pump_port && (
+                  <span className="text-xs text-slate-500">← önce port seçin</span>
+                )}
                 {pumpTestResult && (
                   <span className={`text-xs ${pumpTestResult.ok ? "text-green-400" : "text-red-400"}`}>
                     {pumpTestResult.ok ? "✓" : "✗"} {pumpTestResult.msg}
