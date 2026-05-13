@@ -27,6 +27,7 @@ export default function Settings() {
   const [startGcode, setStartGcode] = useState("");
   const [endGcode, setEndGcode] = useState("");
   const [pumpTestResult, setPumpTestResult] = useState(null);
+  const [printerTestResult, setPrinterTestResult] = useState(null);
 
   useEffect(() => {
     fetchPorts();
@@ -195,6 +196,33 @@ export default function Settings() {
                 </option>
               ))}
             </select>
+            {/* Printer quick-connect test */}
+            {key === "printer_port" && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <button
+                  disabled={!config.printer_port}
+                  onClick={async () => {
+                    setPrinterTestResult(null);
+                    await axios.post("/system/config", { printer_port: config.printer_port }).catch(() => {});
+                    const res = await axios.post("/system/connect_printer").catch((e) => ({ error: e.response?.data?.detail ?? e.message }));
+                    if (res?.error) setPrinterTestResult({ ok: false, msg: res.error });
+                    else setPrinterTestResult({ ok: true, msg: res.data?.message ?? "Bağlandı!" });
+                    fetchStatus();
+                  }}
+                  className="text-xs px-3 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Yazıcıya Bağlan & Test Et
+                </button>
+                {!config.printer_port && (
+                  <span className="text-xs text-slate-500">← önce port seçin</span>
+                )}
+                {printerTestResult && (
+                  <span className={`text-xs ${printerTestResult.ok ? "text-green-400" : "text-red-400"}`}>
+                    {printerTestResult.ok ? "✓" : "✗"} {printerTestResult.msg}
+                  </span>
+                )}
+              </div>
+            )}
             {/* Arduino quick-connect test — always visible for pump port */}
             {key === "pump_port" && (
               <div className="mt-2 flex items-center gap-2 flex-wrap">

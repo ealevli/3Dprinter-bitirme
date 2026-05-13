@@ -3,6 +3,7 @@ import CameraFeed from "../components/CameraFeed";
 import GCodePreview from "../components/GCodePreview";
 import PumpControls from "../components/PumpControls";
 import CoatingParams from "../components/CoatingParams";
+import PrinterJog from "../components/PrinterJog";
 import axios from "axios";
 
 /** Shows detected part dimensions below the camera feed. */
@@ -60,6 +61,33 @@ export default function Dashboard() {
   const [jobStatus, setJobStatus] = useState(null);
   const [showGcode, setShowGcode] = useState(false);
   const previewRef = useRef(null);
+  const pollIntervalRef = useRef(null);
+
+  const [bgExists, setBgExists] = useState(false);
+
+  useEffect(() => {
+    axios.get("/camera/background").then(r => setBgExists(r.data.exists)).catch(() => {});
+  }, []);
+
+  async function handleSaveBg() {
+    try {
+      const res = await axios.post("/camera/background");
+      setBgExists(true);
+      addLog(res.data.message);
+    } catch (err) {
+      addLog(`Arka plan hatası: ${err.response?.data?.detail ?? err.message}`);
+    }
+  }
+
+  async function handleDeleteBg() {
+    try {
+      const res = await axios.delete("/camera/background");
+      setBgExists(false);
+      addLog(res.data.message);
+    } catch (err) {
+      addLog(`Silme hatası: ${err.response?.data?.detail ?? err.message}`);
+    }
+  }
 
   // Auto-scroll to G-code preview when it appears
   useEffect(() => {
@@ -90,7 +118,7 @@ export default function Dashboard() {
       setDetection(res.data);
       if (res.data.contour_mm?.length) {
         addLog(
-          `Parça tespit edildi. Kontur noktaları: ${res.data.contour_mm.length}` +
+          `Parça tespit edildi (${res.data.method}). Kontur: ${res.data.contour_mm.length} nokta` +
             (res.data.class_name
               ? `, sınıf: ${res.data.class_name} (${(res.data.confidence * 100).toFixed(0)}%)`
               : "")
@@ -173,30 +201,48 @@ export default function Dashboard() {
   }
 
   function pollStatus() {
-    const interval = setInterval(async () => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    pollIntervalRef.current = setInterval(async () => {
       try {
         const res = await axios.get("/gcode/status");
         setJobStatus(res.data);
-        if (res.data.status === "done") {
+        const st = res.data.status;
+        const stop = () => {
+          setIsSending(false);
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        };
+        if (st === "done") {
           addLog("Kaplama tamamlandı.");
-          setIsSending(false);
-          clearInterval(interval);
-        } else if (res.data.status === "error") {
-          addLog("Gönderim sırasında hata oluştu.");
-          setIsSending(false);
-          clearInterval(interval);
+          stop();
+        } else if (st === "stopped") {
+          addLog(`Durduruldu (${res.data.current_line}/${res.data.total_lines} satır gönderildi).`);
+          stop();
+        } else if (st === "error") {
+          const detail = res.data.last_error ? ` — ${res.data.last_error}` : "";
+          addLog(`Gönderim hatası (satır ${res.data.current_line}/${res.data.total_lines})${detail}`);
+          stop();
+        } else if (st === "idle" && res.data.total_lines === 0) {
+          // Backend restarted mid-send (hot reload / crash) — unlock UI
+          addLog("Bağlantı kesildi veya backend yeniden başladı. Yazıcıyı yeniden bağlayın.");
+          stop();
         }
       } catch {
-        clearInterval(interval);
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
         setIsSending(false);
       }
     }, 1000);
   }
 
   async function handleStop() {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
     await axios.post("/gcode/stop").catch(() => {});
     setIsSending(false);
-    addLog("Durdurma komutu gönderildi (M112).");
+    addLog("Durdurma komutu gönderildi.");
   }
 
   return (
@@ -268,12 +314,31 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Background controls */}
+          <div className="flex gap-3">
+            <button
+              onClick={handleSaveBg}
+              className="flex-1 py-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 font-semibold text-sm flex justify-between items-center px-4 transition-colors"
+            >
+              <span className="text-slate-300">📸 Boş Tablayı Tanıt</span>
+              {bgExists && <span className="text-green-400 text-xs">✔ Kayıtlı</span>}
+            </button>
+            {bgExists && (
+              <button
+                onClick={handleDeleteBg}
+                className="px-4 py-2 rounded bg-slate-800 hover:bg-red-900/40 text-slate-400 hover:text-red-400 font-semibold text-sm transition-colors border border-slate-700"
+              >
+                Sil
+              </button>
+            )}
+          </div>
+
           {/* Action buttons */}
           <div className="flex gap-3">
             <button
               onClick={handleScan}
               disabled={isScanning}
-              className="flex-1 py-2 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 font-semibold text-sm"
+              className="flex-1 py-2 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 font-semibold text-sm transition-colors"
             >
               {isScanning ? "Taranıyor…" : "Tara"}
             </button>
@@ -281,14 +346,14 @@ export default function Dashboard() {
               onClick={handlePreview}
               disabled={!detection?.contour_px?.length}
               title={!detection?.calibrated ? "Kalibrasyon yapılmamış — mm koordinatı yok, piksel koordinatıyla devam edilecek" : ""}
-              className="flex-1 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-semibold text-sm"
+              className="flex-1 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-semibold text-sm transition-colors"
             >
               Önizle
             </button>
             {isSending ? (
               <button
                 onClick={handleStop}
-                className="flex-1 py-2 rounded bg-red-600 hover:bg-red-500 font-semibold text-sm"
+                className="flex-1 py-2 rounded bg-red-600 hover:bg-red-500 font-semibold text-sm transition-colors"
               >
                 Durdur
               </button>
@@ -296,7 +361,7 @@ export default function Dashboard() {
               <button
                 onClick={handleStart}
                 disabled={!gcodeResult}
-                className="flex-1 py-2 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50 font-semibold text-sm"
+                className="flex-1 py-2 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50 font-semibold text-sm transition-colors"
               >
                 Başlat
               </button>
@@ -329,6 +394,7 @@ export default function Dashboard() {
         {/* Right: controls */}
         <div className="w-64 flex flex-col gap-3">
           <PumpControls onLog={addLog} />
+          <PrinterJog onLog={addLog} />
           <CoatingParams params={params} onChange={setParams} />
         </div>
       </div>

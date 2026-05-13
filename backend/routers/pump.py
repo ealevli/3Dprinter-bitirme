@@ -22,6 +22,12 @@ router = APIRouter()
 class SpeedRequest(BaseModel):
     rpm: int
 
+class DirectionRequest(BaseModel):
+    forward: bool   # True = ileri (kaplama), False = geri (geri çekme)
+
+class PrimeRequest(BaseModel):
+    steps: int      # kaç adım ilerletilecek
+
 
 def _ensure_connected() -> None:
     if not pump_serial.is_connected:
@@ -84,8 +90,29 @@ async def speed(req: SpeedRequest):
     return {"message": f"Hız {req.rpm} RPM olarak ayarlandı."}
 
 
+@router.post("/direction")
+async def direction(req: DirectionRequest):
+    _ensure_connected()
+    ok = pump_serial.set_direction(req.forward)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Yön değiştirilemedi.")
+    label = "ileri (kaplama)" if req.forward else "geri (geri çekme)"
+    return {"message": f"Yön {label} olarak ayarlandı."}
+
+
+@router.post("/prime")
+async def prime(req: PrimeRequest):
+    _ensure_connected()
+    if req.steps <= 0:
+        raise HTTPException(status_code=400, detail="steps > 0 olmalı.")
+    ok = pump_serial.prime(req.steps)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Prime başlatılamadı.")
+    return {"message": f"Prime başlatıldı ({req.steps} adım)."}
+
+
 @router.get("/status")
 async def status():
     if not pump_serial.is_connected:
-        return {"running": False, "rpm": 0, "connected": False}
+        return {"running": False, "rpm": 0, "direction": "fwd", "connected": False}
     return {**pump_serial.get_status(), "connected": True}

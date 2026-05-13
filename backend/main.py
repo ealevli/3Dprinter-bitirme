@@ -6,7 +6,7 @@ Registers all routers and configures CORS for the React frontend.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import camera, detection, gcode, pump, parts, system
+from routers import camera, detection, gcode, pump, parts, system, jog
 
 app = FastAPI(
     title="3D Printer Coating System API",
@@ -29,6 +29,7 @@ app.include_router(gcode.router, prefix="/gcode", tags=["G-code"])
 app.include_router(pump.router, prefix="/pump", tags=["Pump"])
 app.include_router(parts.router, prefix="/parts", tags=["Parts Library"])
 app.include_router(system.router, prefix="/system", tags=["System"])
+app.include_router(jog.router, prefix="/jog", tags=["Jog"])
 
 
 @app.get("/", tags=["Root"])

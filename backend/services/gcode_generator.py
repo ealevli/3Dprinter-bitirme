@@ -28,20 +28,20 @@ from typing import Literal
 
 from shapely.geometry import LineString, Polygon
 
-PatternType = Literal["zigzag", "parallel", "spiral"]
+PatternType = Literal["zigzag", "parallel", "spiral", "honeycomb", "crosshatch", "gradient"]
 
 # ── Default G-code sequences ──────────────────────────────────────────────────
 
 DEFAULT_START_GCODE = """\
-G28 ; Eksenleri sifirla (BLTouch Z=0 tabla yuzeyine kalibre eder)
-; G29 ; BLTouch otomatik tabla seviyele — istege bagli, ~3 dak
+G28 X Y ; X ve Y eksenlerini sifirla
 G90 ; Mutlak konum modu
-G0 F{travel_rate} Z{z_travel} ; Nozzle'i kaldir (bant + offset + 5mm)
-G0 F{travel_rate} X{part_x} Y{part_y} ; Parca konumuna git"""
+G0 F{travel_rate} X{part_x} Y{part_y} ; Parca uzerine git
+G28 Z ; BLTouch ile Z eksenini parcanin bulundugu konumda sifirla
+G0 F{travel_rate} Z{z_travel} ; Nozzle'i guvenli yukseklige kaldir"""
 
 DEFAULT_END_GCODE = """\
 G0 F300 Z{z_travel_end} ; Nozzle'i yukari kaldir
-G0 F{travel_rate} X0 Y220 ; Park pozisyonu
+G28 X Y ; X ve Y eksenlerini sifirla (home)
 M84 X Y E ; Motorlari devre disi birak (Z hariç)"""
 
 
@@ -211,6 +211,174 @@ def _spiral_lines(poly: Polygon, p: CoatingParams) -> list[str]:
     return lines
 
 
+def _crosshatch_lines(poly: Polygon, p: CoatingParams) -> list[str]:
+    """Two-pass boustrophedon fill: horizontal then vertical.
+
+    Standard cross-cut pattern (ISO 2409 / ASTM D3359) — ideal for adhesion testing.
+    """
+    minx, miny, maxx, maxy = poly.bounds
+    zc = _z_coat(p)
+    zt = _z_travel(p)
+    fr = p.feed_rate
+    tr = p.travel_rate
+
+    lines: list[str] = ["; INFILL crosshatch"]
+
+    def _scan_pass(horizontal: bool) -> None:
+        fwd = True
+        t = miny if horizontal else minx
+        t_max = maxy if horizontal else maxx
+        while t <= t_max + 1e-9:
+            if horizontal:
+                scan = LineString(
+                    [(minx - 1, t), (maxx + 1, t)] if fwd
+                    else [(maxx + 1, t), (minx - 1, t)]
+                )
+            else:
+                scan = LineString(
+                    [(t, miny - 1), (t, maxy + 1)] if fwd
+                    else [(t, maxy + 1), (t, miny - 1)]
+                )
+            clipped = poly.intersection(scan)
+            if not clipped.is_empty:
+                segs = (
+                    [clipped] if clipped.geom_type == "LineString"
+                    else list(clipped.geoms) if hasattr(clipped, "geoms")
+                    else []
+                )
+                for seg in segs:
+                    if seg.geom_type != "LineString":
+                        continue
+                    cx = list(seg.coords)
+                    if len(cx) < 2:
+                        continue
+                    sx, sy = cx[0]
+                    ex, ey = cx[-1]
+                    lines.append(_rapid(sx, sy, zt, tr))
+                    lines.append(_z_move(zc))
+                    lines.append(_coat_move(ex, ey, fr))
+                    lines.append(_z_move(zt))
+            t   += p.line_spacing
+            fwd  = not fwd
+
+    _scan_pass(horizontal=True)
+    _scan_pass(horizontal=False)
+    return lines
+
+
+def _gradient_lines(poly: Polygon, p: CoatingParams) -> list[str]:
+    """Zigzag fill with linearly increasing line spacing (dense → sparse).
+
+    Lets you compare different coating densities on a single part in one run.
+    Spacing goes from p.line_spacing (left edge) to p.line_spacing * 4 (right edge).
+    """
+    minx, miny, maxx, maxy = poly.bounds
+    zc = _z_coat(p)
+    zt = _z_travel(p)
+    fr = p.feed_rate
+    tr = p.travel_rate
+    width = maxx - minx if maxx > minx else 1.0
+
+    lines: list[str] = ["; INFILL gradient"]
+    y   = miny
+    fwd = True
+
+    while y <= maxy + 1e-9:
+        scan = LineString(
+            [(minx - 1, y), (maxx + 1, y)] if fwd
+            else [(maxx + 1, y), (minx - 1, y)]
+        )
+        clipped = poly.intersection(scan)
+        if not clipped.is_empty:
+            segs = (
+                [clipped] if clipped.geom_type == "LineString"
+                else list(clipped.geoms) if hasattr(clipped, "geoms")
+                else []
+            )
+            for seg in segs:
+                if seg.geom_type != "LineString":
+                    continue
+                cx = list(seg.coords)
+                if len(cx) < 2:
+                    continue
+                sx, sy = cx[0]
+                ex, ey = cx[-1]
+                lines.append(_rapid(sx, sy, zt, tr))
+                lines.append(_z_move(zc))
+                lines.append(_coat_move(ex, ey, fr))
+                lines.append(_z_move(zt))
+
+        # spacing increases linearly from line_spacing (bottom) to 4x (top)
+        t = (y - miny) / (maxy - miny) if maxy > miny else 0.0
+        current_spacing = p.line_spacing * (1.0 + 3.0 * t)
+        y   += current_spacing
+        fwd  = not fwd
+
+    return lines
+
+
+def _honeycomb_lines(poly: Polygon, p: CoatingParams) -> list[str]:
+    """Flat-top hexagonal honeycomb fill clipped to poly.
+
+    p.line_spacing is the flat-to-flat cell distance (mm).
+    Each hexagonal cell that overlaps the part is traced as a closed outline.
+    """
+    cell = max(p.line_spacing, 0.5)          # flat-to-flat distance (mm)
+    R    = cell / math.sqrt(3)               # circumradius for flat-top hex
+
+    minx, miny, maxx, maxy = poly.bounds
+    margin = R * 2                           # extra grid margin for full coverage
+
+    col_dx     = 1.5 * R                     # horizontal spacing between column centres
+    row_dy     = cell                        # vertical spacing within a column
+    col_offset = cell / 2                    # vertical shift for odd columns
+
+    zc = _z_coat(p)
+    zt = _z_travel(p)
+    fr = p.feed_rate
+    tr = p.travel_rate
+
+    lines: list[str] = ["; INFILL honeycomb"]
+
+    def _trace_polygon(coords: list) -> None:
+        if len(coords) < 2:
+            return
+        sx, sy = coords[0]
+        lines.append(_rapid(sx, sy, zt, tr))
+        lines.append(_z_move(zc))
+        for x, y in coords[1:]:
+            lines.append(_coat_move(x, y, fr))
+        lines.append(_z_move(zt))
+
+    col = 0
+    cx = minx - margin
+    while cx <= maxx + margin:
+        cy = miny - margin + (col % 2) * col_offset
+        while cy <= maxy + margin:
+            # flat-top hexagon vertices: angles 0°, 60°, 120°, 180°, 240°, 300°
+            hex_pts = [
+                (cx + R * math.cos(math.radians(60 * k)),
+                 cy + R * math.sin(math.radians(60 * k)))
+                for k in range(6)
+            ]
+            hex_pts.append(hex_pts[0])          # close ring
+
+            clipped = Polygon(hex_pts).intersection(poly)
+            if not clipped.is_empty and clipped.area > 0.01:
+                if clipped.geom_type == "Polygon":
+                    _trace_polygon(list(clipped.exterior.coords))
+                elif hasattr(clipped, "geoms"):
+                    for geom in clipped.geoms:
+                        if geom.geom_type == "Polygon":
+                            _trace_polygon(list(geom.exterior.coords))
+
+            cy += row_dy
+        cx += col_dx
+        col += 1
+
+    return lines
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def generate_gcode(
@@ -306,6 +474,12 @@ def generate_gcode(
         fill = _spiral_lines(poly, params)
     elif params.pattern_type == "parallel":
         fill = _parallel_lines(poly, params)
+    elif params.pattern_type == "honeycomb":
+        fill = _honeycomb_lines(poly, params)
+    elif params.pattern_type == "crosshatch":
+        fill = _crosshatch_lines(poly, params)
+    elif params.pattern_type == "gradient":
+        fill = _gradient_lines(poly, params)
     else:
         fill = _zigzag_lines(poly, params)
 

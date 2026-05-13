@@ -177,3 +177,30 @@ async def calibrate():
     if not result["success"]:
         raise HTTPException(status_code=422, detail=result["error"])
     return result
+
+
+@router.post("/background")
+async def save_background():
+    """Capture a single frame and save it as the background for subtraction."""
+    _ensure_camera()
+    img = camera_service.capture_frame()
+    if img is None:
+        raise HTTPException(status_code=500, detail="Frame alınamadı.")
+    os.makedirs(os.path.dirname(config.BACKGROUND_IMAGE_PATH), exist_ok=True)
+    cv2.imwrite(config.BACKGROUND_IMAGE_PATH, img)
+    return {"message": "Arka plan başarıyla kaydedildi.", "success": True}
+
+
+@router.delete("/background")
+async def delete_background():
+    """Delete the saved background image."""
+    if os.path.exists(config.BACKGROUND_IMAGE_PATH):
+        os.remove(config.BACKGROUND_IMAGE_PATH)
+    return {"message": "Arka plan silindi.", "success": True}
+
+
+@router.get("/background")
+async def get_background_status():
+    """Check if a background image exists."""
+    exists = os.path.exists(config.BACKGROUND_IMAGE_PATH)
+    return {"exists": exists}

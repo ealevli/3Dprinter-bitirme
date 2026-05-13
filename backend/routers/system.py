@@ -63,6 +63,19 @@ async def status():
     }
 
 
+@router.post("/connect_printer")
+async def connect_printer():
+    """Disconnect and reconnect the printer using the current config port."""
+    printer_serial.disconnect()
+    ok = printer_serial.connect()
+    if not ok:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Yazıcıya bağlanılamadı: {config.PRINTER_PORT}. Port ve baud rate'i kontrol edin.",
+        )
+    return {"message": f"{config.PRINTER_PORT} portuna bağlandı."}
+
+
 @router.post("/config")
 async def update_config(updates: dict[str, Any]):
     """

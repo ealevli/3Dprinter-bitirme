@@ -37,6 +37,7 @@ CALIBRATION_FILE = "data/calibration.json"
 PARTS_DB_FILE = "data/parts_db.json"
 UPLOADS_DIR = "data/uploads"
 USER_CONFIG_FILE = "data/user_config.json"   # persisted user settings
+BACKGROUND_IMAGE_PATH = "data/background.png"
 
 # ── G-code Defaults ───────────────────────────────────────────────────────────
 DEFAULT_LINE_SPACING_MM = 1.0

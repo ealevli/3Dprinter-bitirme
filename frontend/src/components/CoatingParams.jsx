@@ -4,22 +4,25 @@ import { useState } from "react";
 // Her parametre için: ne işe yarar, nasıl ayarlanır, önerilen aralık
 const PARAM_INFO = {
   line_spacing: {
-    label: "Çizgi Aralığı (mm)",
+    label: "Çizgi Aralığı / Hücre Boyutu (mm)",
     unit: "mm",
     min: 0.2,
-    max: 5,
+    max: 20,
     step: 0.1,
     color: "blue",
-    short: "Kaplama çizgileri arasındaki mesafe",
+    short: "Kaplama çizgileri arasındaki mesafe (Honeycomb için: iki kenar arası mesafe)",
     detail: [
-      "Küçük değer (0.5–1 mm) → daha yoğun kaplama, daha uzun süre, çözelti daha çok harcar",
-      "Büyük değer (2–4 mm) → seyrek kaplama, hızlı biter, aralıklı çizgi görünür",
-      "Başlangıç için 1 mm önerilir — sonra sonuca göre ayarla",
+      "Zigzag / Paralel: çizgiler arası boşluk (0.5–4 mm önerilir)",
+      "Spiral: halkalar arası boşluk",
+      "Honeycomb: karşılıklı iki kenar arası mesafe — 10 mm önerilen başlangıç",
+      "Küçük değer → daha yoğun desen, daha uzun süre",
+      "Büyük değer → seyrek desen, hızlı biter",
     ],
     presets: [
       { label: "Yoğun", value: 0.5 },
       { label: "Normal", value: 1.0 },
       { label: "Seyrek", value: 2.0 },
+      { label: "Honeycomb 10mm", value: 10.0 },
     ],
   },
   z_offset: {
@@ -216,24 +219,40 @@ export default function CoatingParams({ params, onChange }) {
               short: "Kaplama yolu şekli",
               detail: [
                 "Zigzag: ileri-geri paralel çizgiler — en verimli ve hızlı",
-                "Paralel: tek yönde gidip boş dönüş — zigzag'dan yavaş ama daha düzenli",
-                "Spiral: dıştan içe döngü — köşeli parçalarda iyi çalışmaz",
+                "Paralel: tek yönde gidip boş dönüş — düzenli tek yön",
+                "Spiral: dıştan içe ofset halkalar — kontur takip eder",
+                "Honeycomb: altıgen petek — Hücre Boyutu 10 mm (iki kenar arası)",
+                "Çapraz: yatay + dikey çift tarama — ISO 2409 yapışma testi deseni",
+                "Gradyan: altta yoğun üstte seyrek — tek parçada farklı yoğunluk karşılaştırması",
               ],
             }}
           />
         </div>
-        <div className="flex gap-2">
-          {["zigzag", "parallel", "spiral"].map((p) => (
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { value: "zigzag",     label: "Zigzag"   },
+            { value: "parallel",   label: "Paralel"  },
+            { value: "spiral",     label: "Spiral"   },
+            { value: "honeycomb",  label: "Honeycomb"},
+            { value: "crosshatch", label: "Çapraz"   },
+            { value: "gradient",   label: "Gradyan"  },
+          ].map(({ value, label }) => (
             <button
-              key={p}
-              onClick={() => set("pattern_type", p)}
-              className={`flex-1 py-1 text-xs rounded border transition-colors capitalize ${
-                params.pattern_type === p
+              key={value}
+              onClick={() => {
+                if (value === "honeycomb") {
+                  onChange({ ...params, pattern_type: value, line_spacing: 10.0 });
+                } else {
+                  set("pattern_type", value);
+                }
+              }}
+              className={`flex-1 py-1 text-xs rounded border transition-colors ${
+                params.pattern_type === value
                   ? "border-blue-500 text-blue-300 bg-blue-950"
                   : "border-slate-600 text-slate-400 hover:border-slate-400"
               }`}
             >
-              {p === "zigzag" ? "Zigzag" : p === "parallel" ? "Paralel" : "Spiral"}
+              {label}
             </button>
           ))}
         </div>

@@ -1,14 +1,19 @@
 """
 Part detection service.
 
-Strategy (in order of attempt):
-  A. Two-pass: find bright background (white paper) → find dark part inside it
-  B. Direct: find compact dark object in bed ROI (no paper)
+Strategy:
+  1. paper_roi  — find genuine white paper (R>170 AND G>170 AND B>170)
+                  then find anything non-white inside it.
+                  Handles any color part on white background.
 
-Pipeline after finding the contour:
-  - approxPolyDP simplification
-  - pixel_to_mm transform
-  - (Optional) YOLOv8 classification
+  2. direct     — no paper. Compute bed background color as the median of
+                  all masked pixels, then find blobs that differ from it.
+                  Handles any color part directly on the print bed.
+
+Contour post-processing:
+  - Always take convex hull (removes jagged noise)
+  - approxPolyDP with gentle epsilon
+  - Fallback to minAreaRect 4-corner box if fewer than 4 points remain
 """
 
 from __future__ import annotations
@@ -24,8 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from services.calibration import load_calibration, pixel_to_mm, detect_markers
 
+# Downscale all CV operations to this width for speed.
+# Contour coordinates are scaled back to original resolution before returning.
+_MAX_DETECT_W = 640
 
-# ── Mask helpers ─────────────────────────────────────────────────────────────
+
+# ── Bed mask ──────────────────────────────────────────────────────────────────
 
 def _build_bed_mask(
     frame: np.ndarray,
@@ -34,22 +43,20 @@ def _build_bed_mask(
 ) -> np.ndarray:
     h, w = frame.shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
-
     if len(marker_px) >= 2:
         centers = np.array(list(marker_px.values()), dtype=np.float32)
         hull = cv2.convexHull(centers.reshape(-1, 1, 2).astype(np.int32))
         cv2.fillConvexPoly(mask, hull, 255)
-        # Black out marker squares themselves
         half = marker_size_px // 2
         for (cx, cy) in marker_px.values():
-            x1, y1 = max(0, int(cx)-half), max(0, int(cy)-half)
-            x2, y2 = min(w, int(cx)+half), min(h, int(cy)+half)
+            x1 = max(0, int(cx) - half)
+            y1 = max(0, int(cy) - half)
+            x2 = min(w, int(cx) + half)
+            y2 = min(h, int(cy) + half)
             mask[y1:y2, x1:x2] = 0
     else:
-        # No markers: use centre 70% of frame
-        mx0, my0 = int(w*0.15), int(h*0.15)
-        mask[my0:int(h*0.85), mx0:int(w*0.85)] = 255
-
+        mx0, my0 = int(w * 0.15), int(h * 0.15)
+        mask[my0:int(h * 0.85), mx0:int(w * 0.85)] = 255
     return mask
 
 
@@ -61,212 +68,271 @@ def _bed_area_px(marker_px: dict) -> float:
     return float(cv2.contourArea(hull))
 
 
-# ── Detection passes ──────────────────────────────────────────────────────────
+# ── Shared contour picker ─────────────────────────────────────────────────────
 
-def _find_paper_roi(gray: np.ndarray, mask: np.ndarray) -> Optional[tuple[int,int,int,int]]:
-    """
-    Try to find a bright background (white paper / light surface) in the masked area.
-    Returns (x, y, w, h) bounding box or None.
-    """
-    # Threshold for bright objects (paper is very bright)
-    _, bright = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
-    bright = cv2.bitwise_and(bright, mask)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel)
-    bright = cv2.morphologyEx(bright, cv2.MORPH_OPEN,  kernel)
-
-    contours, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    # Largest bright region = paper
-    paper = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(paper)
-    if area < 5000:  # too small to be a paper
-        return None
-
-    x, y, w, h = cv2.boundingRect(paper)
-    # Add small inset so we don't pick up paper edge artefacts
-    pad = 10
-    return (x+pad, y+pad, max(1, w-2*pad), max(1, h-2*pad))
-
-
-def _find_dark_part_in_roi(
-    gray: np.ndarray,
-    roi: tuple[int,int,int,int],
-) -> Optional[np.ndarray]:
-    """
-    Find the most compact DARK object inside the given ROI (bright paper background).
-
-    Uses Otsu thresholding — optimal for bimodal dark-part / white-paper histogram.
-    Falls back to fixed threshold if Otsu fails.
-    Returns the best contour in full-frame coordinates, or None.
-    """
-    x, y, w, h = roi
-    if w <= 0 or h <= 0:
-        return None
-
-    crop = gray[y:y+h, x:x+w]
-    blurred = cv2.GaussianBlur(crop, (5, 5), 0)
-
-    # Strategy 1: Otsu — best for bright-bg / dark-object
-    otsu_thresh, t_otsu = cv2.threshold(
-        blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-    )
-
-    # Strategy 2: simple fixed dark threshold (anything darker than 140 = dark)
-    _, t_fixed = cv2.threshold(blurred, 140, 255, cv2.THRESH_BINARY_INV)
-
-    # Combine — any pixel dark by either method
-    combined = cv2.bitwise_or(t_otsu, t_fixed)
-
-    # Clean up noise
-    k5 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    k3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, k5)
-    combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN,  k3)
-
-    contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    roi_area = w * h
+def _best_contour(contours, min_area: int, max_area: float) -> Optional[np.ndarray]:
+    """Return the most solid, compact, reasonably-sized contour."""
     best, best_score = None, -1.0
-
     for c in contours:
         area = cv2.contourArea(c)
-        # Must be meaningful size but not fill the whole ROI
-        if area < 500 or area > roi_area * 0.65:
+        if area < min_area or area > max_area:
             continue
-
         hull_area = cv2.contourArea(cv2.convexHull(c))
         solidity = area / hull_area if hull_area > 0 else 0
-
         bx, by, bw, bh = cv2.boundingRect(c)
         aspect = max(bw, bh) / max(min(bw, bh), 1)
-
-        # Hard reject: very elongated shapes (aspect > 4) are edge artefacts, not parts
-        if aspect > 4.0:
+        if aspect > 5.0:
             continue
-
-        # Score: reward solid + compact + larger
-        aspect_score = 1.0 if aspect < 1.5 else (0.8 if aspect < 2.5 else 0.4)
+        aspect_score = 1.0 if aspect < 2.0 else (0.5 if aspect < 3.5 else 0.1)
         score = (solidity ** 2) * aspect_score * area
         if score > best_score:
             best_score = score
             best = c
+    return best
 
+
+def _morph_clean(img: np.ndarray, close_k: int = 9, open_k: int = 5) -> np.ndarray:
+    kc = cv2.getStructuringElement(cv2.MORPH_RECT, (close_k, close_k))
+    ko = cv2.getStructuringElement(cv2.MORPH_RECT, (open_k, open_k))
+    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kc)
+    img = cv2.morphologyEx(img, cv2.MORPH_OPEN, ko)
+    return img
+
+
+# ── Pass A: white paper + non-white part ─────────────────────────────────────
+
+def _find_paper_roi(frame: np.ndarray, mask: np.ndarray) -> Optional[tuple]:
+    """Find a genuinely white region (paper). Rejects colored objects."""
+    b, g, r = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
+    white = (
+        (b.astype(np.int16) > 170) &
+        (g.astype(np.int16) > 170) &
+        (r.astype(np.int16) > 170)
+    ).astype(np.uint8) * 255
+    white = cv2.bitwise_and(white, mask)
+    white = _morph_clean(white, close_k=11, open_k=9)
+
+    contours, _ = cv2.findContours(white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    paper = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(paper) < 8000:
+        return None
+    x, y, w, h = cv2.boundingRect(paper)
+    pad = 12
+    return (x + pad, y + pad, max(1, w - 2 * pad), max(1, h - 2 * pad))
+
+
+def _find_part_in_roi(frame: np.ndarray, roi: tuple) -> Optional[np.ndarray]:
+    """Find anything non-white inside the paper ROI."""
+    x, y, w, h = roi
+    if w <= 0 or h <= 0:
+        return None
+    crop = frame[y:y + h, x:x + w].astype(np.float32)
+    dist = np.sqrt(
+        (255 - crop[:, :, 0]) ** 2 +
+        (255 - crop[:, :, 1]) ** 2 +
+        (255 - crop[:, :, 2]) ** 2
+    )
+    dist_u8 = np.clip(dist / 441.0 * 255, 0, 255).astype(np.uint8)
+    blurred = cv2.GaussianBlur(dist_u8, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 40, 255, cv2.THRESH_BINARY)
+    thresh = _morph_clean(thresh, close_k=7, open_k=5)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best = _best_contour(contours, min_area=500, max_area=w * h * 0.85)
     if best is None:
         return None
-
-    # Shift contour back to full-frame coordinates
     return best + np.array([[[x, y]]])
+# ── Pass B: background subtraction ────────────────────────────────────────────
 
-
-def _find_part_direct(
-    gray: np.ndarray,
+def _find_part_bg_subtraction(
+    frame: np.ndarray,
     mask: np.ndarray,
     bed_area: float,
 ) -> Optional[np.ndarray]:
     """
-    Fallback: find the best compact contour directly in the masked bed area.
-    Works when there is no white paper background.
+    Background subtraction pass. Load the saved background frame, compute absolute
+    difference, threshold, and find contours.
     """
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    eq = clahe.apply(gray)
-    blurred = cv2.GaussianBlur(eq, (7, 7), 0)
+    if not os.path.exists(config.BACKGROUND_IMAGE_PATH):
+        return None
 
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        blockSize=21, C=4,
+    bg = cv2.imread(config.BACKGROUND_IMAGE_PATH)
+    if bg is None:
+        return None
+
+    # Ensure background matches the current frame size
+    if bg.shape != frame.shape:
+        bg = cv2.resize(bg, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_AREA)
+
+    f = frame.astype(np.float32)
+    b = bg.astype(np.float32)
+
+    # Euclidean distance in BGR space
+    dist = np.sqrt(
+        (f[:, :, 0] - b[:, :, 0]) ** 2 +
+        (f[:, :, 1] - b[:, :, 1]) ** 2 +
+        (f[:, :, 2] - b[:, :, 2]) ** 2
     )
+    dist_u8 = np.clip(dist / 441.0 * 255, 0, 255).astype(np.uint8)
+    blurred = cv2.GaussianBlur(dist_u8, (7, 7), 0)
+
+    # Use Otsu's method on the masked bed area to find the optimal difference threshold
+    diff_vals = blurred[mask > 0]
+    if len(diff_vals) > 100:
+        # Reshape to 2D to prevent OpenCV from hanging on 1D arrays!
+        diff_img = diff_vals.copy().reshape(-1, 1)
+        otsu, _ = cv2.threshold(diff_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Cap the threshold so we don't miss faint differences, but don't go too low (noise)
+        threshold = max(15.0, min(float(otsu), 50.0))
+    else:
+        threshold = 25.0
+
+    _, thresh = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY)
+    
     thresh = cv2.bitwise_and(thresh, mask)
+    # Use larger close kernel to fill gaps caused by glare/reflections
+    thresh = _morph_clean(thresh, close_k=15, open_k=5)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return _best_contour(contours, min_area=config.MIN_CONTOUR_AREA_PX, max_area=bed_area * 0.80)
 
-    contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    max_area = bed_area * 0.50
 
-    best, best_score = None, -1.0
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < config.MIN_CONTOUR_AREA_PX or area > max_area:
-            continue
-        hull_area = cv2.contourArea(cv2.convexHull(c))
-        solidity = area / hull_area if hull_area > 0 else 0
-        bx, by, bw, bh = cv2.boundingRect(c)
-        aspect = max(bw, bh) / max(min(bw, bh), 1)
-        aspect_score = 1.0 if aspect < 2.0 else (0.4 if aspect < 3.5 else 0.0)
-        score = solidity * aspect_score * area
-        if score > best_score:
-            best_score = score
-            best = c
+# ── Pass C: direct on bed ─────────────────────────────────────────────────────
 
-    return best
+def _find_part_direct(
+    frame: np.ndarray,
+    mask: np.ndarray,
+    bed_area: float,
+) -> Optional[np.ndarray]:
+    """
+    No paper. Use the median of all masked bed pixels as background color,
+    then find blobs that differ significantly from it.
+    Works for any object color (grey, red, dark) on the bed.
+    """
+    bed_pixels = frame[mask > 0]
+    if len(bed_pixels) < 100:
+        return None
+    bg = np.median(bed_pixels, axis=0).astype(np.float32)  # median BGR
+
+    f = frame.astype(np.float32)
+    dist = np.sqrt(
+        (f[:, :, 0] - bg[0]) ** 2 +
+        (f[:, :, 1] - bg[1]) ** 2 +
+        (f[:, :, 2] - bg[2]) ** 2
+    )
+    dist_u8 = np.clip(dist / 441.0 * 255, 0, 255).astype(np.uint8)
+    blurred = cv2.GaussianBlur(dist_u8, (7, 7), 0)
+
+    # Mask out glare (very bright pixels) before computing threshold —
+    # otherwise glare dominates Otsu and grey/dark parts fall below the cut.
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    glare_mask = (gray < 210).astype(np.uint8) * 255
+    no_glare = cv2.bitwise_and(blurred, glare_mask)
+
+    # Compute Otsu threshold on glare-free pixels only
+    masked_vals = no_glare[mask > 0]
+    if len(masked_vals) > 100:
+        masked_img = masked_vals.copy().reshape(-1, 1)
+        otsu_thresh, _ = cv2.threshold(masked_img, 0, 255,
+                                       cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Use at most 60 so faint parts (grey on brown) aren't missed
+        threshold = min(float(otsu_thresh), 60.0)
+    else:
+        threshold = 35.0
+
+    _, thresh = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY)
+    thresh = cv2.bitwise_and(thresh, mask)
+    thresh = cv2.bitwise_and(thresh, glare_mask)  # also exclude glare blobs
+    thresh = _morph_clean(thresh, close_k=9, open_k=7)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return _best_contour(contours, min_area=config.MIN_CONTOUR_AREA_PX, max_area=bed_area * 0.70)
+
+
+# ── Contour post-processing ───────────────────────────────────────────────────
+
+def _clean_contour(raw: np.ndarray) -> np.ndarray:
+    """Convex hull → approxPolyDP → fallback to minAreaRect 4-box."""
+    hull = cv2.convexHull(raw)
+    epsilon = 0.02 * cv2.arcLength(hull, True)
+    approx = cv2.approxPolyDP(hull, epsilon, True)
+    
+    if len(approx) < 4:
+        rect = cv2.minAreaRect(raw)
+        box = cv2.boxPoints(rect)
+        approx = box.reshape(-1, 1, 2).astype(np.int32)
+        
+    return approx
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def detect_part(frame: np.ndarray, use_ml: bool = True) -> dict:
-    """
-    Detect the part in *frame*.
-
-    Returns:
-    {
-        contour_px, contour_mm, bbox,
-        class_name, confidence,
-        calibrated, markers_found,
-        method,   # "paper_roi" | "direct" | "none"
-        error,
-    }
-    """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # 1. Markers → bed mask
-    marker_px = detect_markers(frame)
-    markers_found = len(marker_px)
+def detect_part(frame: np.ndarray, use_ml: bool = False) -> dict:
     frame_h, frame_w = frame.shape[:2]
-    marker_size_px = max(40, frame_w // 12)
-    mask = _build_bed_mask(frame, marker_px, marker_size_px)
+
+    # Downscale for fast CV processing; scale results back at the end.
+    if frame_w > _MAX_DETECT_W:
+        scale = _MAX_DETECT_W / frame_w
+        small = cv2.resize(frame, (_MAX_DETECT_W, int(frame_h * scale)),
+                           interpolation=cv2.INTER_AREA)
+    else:
+        scale = 1.0
+        small = frame
+
+    sh, sw = small.shape[:2]
+    marker_px = detect_markers(small)
+    markers_found = len(marker_px)
+    marker_size_px = max(40, sw // 12)
+    mask = _build_bed_mask(small, marker_px, marker_size_px)
     bed_area = _bed_area_px(marker_px)
 
-    # 2a. Try two-pass (paper → dark part inside paper)
     method = "none"
-    best_contour = None
+    raw_contour = None
 
-    paper_roi = _find_paper_roi(gray, mask)
-    if paper_roi is not None:
-        best_contour = _find_dark_part_in_roi(gray, paper_roi)
-        if best_contour is not None:
-            method = "paper_roi"
+    # Pass A: Background Subtraction (Preferred)
+    raw_contour = _find_part_bg_subtraction(small, mask, bed_area)
+    if raw_contour is not None:
+        method = "bg_sub"
 
-    # 2b. Fallback: direct search in bed area
-    if best_contour is None:
-        best_contour = _find_part_direct(gray, mask, bed_area)
-        if best_contour is not None:
+    # Pass B: Paper ROI
+    if raw_contour is None:
+        paper_roi = _find_paper_roi(small, mask)
+        if paper_roi is not None:
+            raw_contour = _find_part_in_roi(small, paper_roi)
+            if raw_contour is not None:
+                method = "paper_roi"
+
+    # Pass C: Direct
+    if raw_contour is None:
+        raw_contour = _find_part_direct(small, mask, bed_area)
+        if raw_contour is not None:
             method = "direct"
 
-    if best_contour is None:
+    if raw_contour is None:
         return {
             "contour_px": [], "contour_mm": [], "bbox": None,
             "class_name": None, "confidence": None,
             "calibrated": load_calibration() is not None,
             "markers_found": markers_found,
             "method": "none",
-            "error": "Parça bulunamadı. Parçayı beyaz kağıt üzerine koy, ışık düzgün olsun.",
+            "error": "Parca bulunamadi. Beyaz kagit uzerine koy veya isigi ayarla.",
         }
 
-    # 3. Simplify contour
-    epsilon = 0.008 * cv2.arcLength(best_contour, True)
-    approx = cv2.approxPolyDP(best_contour, epsilon, True)
-    contour_px = approx.reshape(-1, 2).tolist()
-    x, y, w, h = cv2.boundingRect(best_contour)
+    approx = _clean_contour(raw_contour)
 
-    # 4. mm conversion
+    # Scale contour and bbox back to original frame coordinates.
+    if scale != 1.0:
+        inv = 1.0 / scale
+        contour_px = [[int(x * inv), int(y * inv)]
+                      for x, y in approx.reshape(-1, 2).tolist()]
+        xs, ys, ws, hs = cv2.boundingRect(raw_contour)
+        x, y, w, h = int(xs * inv), int(ys * inv), int(ws * inv), int(hs * inv)
+    else:
+        contour_px = approx.reshape(-1, 2).tolist()
+        x, y, w, h = cv2.boundingRect(raw_contour)
+
     H = load_calibration()
     calibrated = H is not None
     contour_mm = (
@@ -274,10 +340,9 @@ def detect_part(frame: np.ndarray, use_ml: bool = True) -> dict:
         if calibrated else []
     )
 
-    # 5. Optional ML
     class_name: Optional[str] = None
     confidence: Optional[float] = None
-    if use_ml and calibrated:
+    if use_ml and calibrated and os.path.exists(config.ML_MODEL_PATH):
         try:
             from ml.model import predict_part
             class_name, confidence = predict_part(frame, [x, y, w, h])
@@ -300,36 +365,26 @@ def detect_part(frame: np.ndarray, use_ml: bool = True) -> dict:
 
 def annotate_frame(frame: np.ndarray, detection: dict) -> np.ndarray:
     out = frame.copy()
-
     if detection["contour_px"]:
         pts = np.array(detection["contour_px"], dtype=np.int32)
         cv2.polylines(out, [pts], True, (0, 255, 0), 2)
-
     if detection["bbox"]:
         x, y, w, h = detection["bbox"]
-        label = detection["class_name"] or "Parça"
-        conf  = detection["confidence"]
-        text  = f"{label} ({conf:.2f})" if conf else label
-        cv2.rectangle(out, (x, y), (x+w, y+h), (0, 200, 255), 2)
-        cv2.putText(out, text, (x, max(y-8, 14)),
+        label = detection["class_name"] or "Parca"
+        conf = detection["confidence"]
+        text = f"{label} ({conf:.2f})" if conf else label
+        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 200, 255), 2)
+        cv2.putText(out, text, (x, max(y - 8, 14)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-
-    # Method tag
     method = detection.get("method", "")
-    method_label = {"paper_roi": "kagit+parca", "direct": "direkt", "none": ""}.get(method, method)
-    if method_label:
-        cv2.putText(out, method_label, (10, 20),
+    if method and method != "none":
+        cv2.putText(out, method, (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 0), 1)
-
-    # Marker count
     n = detection.get("markers_found", 0)
     color = (0, 255, 0) if n >= 4 else (0, 165, 255) if n > 0 else (0, 0, 255)
-    cv2.putText(out, f"Markers: {n}/4",
-                (10, out.shape[0]-10),
+    cv2.putText(out, f"Markers: {n}/4", (10, out.shape[0] - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
-
     if detection.get("error"):
-        cv2.putText(out, detection["error"][:55], (10, 44),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 80, 255), 1)
-
+        cv2.putText(out, detection["error"][:60], (10, 44),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 80, 255), 1)
     return out

@@ -27,6 +27,7 @@ class PumpSerial:
         self._lock = threading.Lock()
         self._running = False
         self._rpm = 0
+        self._direction = "fwd"   # "fwd" | "rev"
 
     # ── Connection ────────────────────────────────────────────────────────────
 
@@ -96,22 +97,38 @@ class PumpSerial:
             return True
         return False
 
+    def set_direction(self, forward: bool) -> bool:
+        """Set motor direction. True = forward (coat), False = reverse (retract)."""
+        resp = self._send(f"DIR:{1 if forward else 0}")
+        if "OK" in resp:
+            self._direction = "fwd" if forward else "rev"
+            return True
+        return False
+
+    def prime(self, steps: int) -> bool:
+        """Run the pump for a fixed number of steps (priming/purge)."""
+        resp = self._send(f"PRIME:{steps}")
+        if "OK" in resp:
+            self._running = True
+            return True
+        return False
+
     def get_status(self) -> dict:
         """Query Arduino for live status."""
         resp = self._send("STATUS")
-        # Expected format: STATUS:running:150 or STATUS:stopped:0
+        # Format: STATUS:running:150:fwd  or  STATUS:stopped:0:rev
         if resp.startswith("STATUS:"):
             parts = resp.split(":")
             if len(parts) >= 3:
-                running = parts[1] == "running"
+                self._running = parts[1] == "running"
                 try:
-                    rpm = int(parts[2])
+                    self._rpm = int(parts[2])
                 except ValueError:
-                    rpm = self._rpm
-                self._running = running
-                self._rpm = rpm
+                    pass
+            if len(parts) >= 4:
+                self._direction = parts[3]
 
-        return {"running": self._running, "rpm": self._rpm}
+        return {"running": self._running, "rpm": self._rpm, "direction": self._direction}
 
 
 pump_serial = PumpSerial()

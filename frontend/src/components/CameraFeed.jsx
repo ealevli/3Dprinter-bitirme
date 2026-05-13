@@ -15,58 +15,16 @@ export default function CameraFeed({ detectionImage, onClearDetection }) {
   const [error, setError] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const poll = useCallback(() => {
-    if (!activeRef.current) return;
-    const url = `/camera/frame?t=${Date.now()}`;
-    fetch(url)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.blob();
-      })
-      .then((blob) => {
-        if (!activeRef.current) return;
-        const objectUrl = URL.createObjectURL(blob);
-        if (imgRef.current) {
-          const old = imgRef.current.src;
-          imgRef.current.src = objectUrl;
-          // Revoke the previous object URL to free memory
-          if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
-        }
-        setError(false);
-        timerRef.current = setTimeout(poll, POLL_MS);
-      })
-      .catch((err) => {
-        if (!activeRef.current) return;
-        setError(true);
-        setErrorMsg(err.message);
-        timerRef.current = setTimeout(poll, ERROR_RETRY_MS);
-      });
-  }, []);
+  // When camera index changes, add a timestamp to force reload the image stream
+  const [streamUrl, setStreamUrl] = useState("/camera/stream");
 
-  useEffect(() => {
-    activeRef.current = true;
-    setError(false);
-    timerRef.current = setTimeout(poll, 50);
-    return () => {
-      activeRef.current = false;
-      clearTimeout(timerRef.current);
-      // Revoke current blob URL on unmount
-      if (imgRef.current?.src?.startsWith("blob:")) {
-        URL.revokeObjectURL(imgRef.current.src);
-      }
-    };
-  }, [poll]);
-
-  // Camera index changed from Settings → restart polling
   useEffect(() => {
     const handler = () => {
-      clearTimeout(timerRef.current);
-      setError(false);
-      timerRef.current = setTimeout(poll, 300);
+      setStreamUrl(`/camera/stream?t=${Date.now()}`);
     };
     window.addEventListener("camera-index-changed", handler);
     return () => window.removeEventListener("camera-index-changed", handler);
-  }, [poll]);
+  }, []);
 
   // Show annotated detection image overlay
   if (detectionImage) {
@@ -89,11 +47,16 @@ export default function CameraFeed({ detectionImage, onClearDetection }) {
 
   return (
     <div className="relative w-full h-full">
-      {/* Live feed */}
+      {/* Live MJPEG stream */}
       <img
-        ref={imgRef}
+        src={streamUrl}
         alt="Canlı Kamera"
         className="w-full h-full object-contain"
+        onError={() => {
+          setError(true);
+          setErrorMsg("Yayın alınamadı");
+        }}
+        onLoad={() => setError(false)}
       />
 
       {/* Error overlay */}

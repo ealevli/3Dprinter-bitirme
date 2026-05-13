@@ -25,6 +25,14 @@ backend/data/parts_db.json
 frontend/node_modules/
 frontend/dist/
 
+# Runtime logs
+.backend.log
+.frontend.log
+
+# User-specific runtime data
+backend/data/user_config.json
+backend/data/background.png
+
 # OS
 .DS_Store
 Thumbs.db

@@ -37,6 +37,12 @@ def _make_detector(adaptive_constant: int = 7) -> cv2.aruco.ArucoDetector:
     return cv2.aruco.ArucoDetector(aruco_dict, params)
 
 
+# Pre-built detectors — created once at import time, reused every call.
+_DETECTORS: dict[int, cv2.aruco.ArucoDetector] = {
+    c: _make_detector(c) for c in (7, 3, 12)
+}
+
+
 def _preprocess_variants(frame: np.ndarray) -> list[np.ndarray]:
     """
     Return several preprocessed versions of frame to try ArUco detection on.
@@ -75,17 +81,21 @@ def detect_markers(frame: np.ndarray) -> dict[int, tuple[float, float]]:
     variants = _preprocess_variants(frame)
 
     for constant in (7, 3, 12):
-        detector = _make_detector(adaptive_constant=constant)
+        detector = _DETECTORS[constant]
         for preprocessed in variants:
             corners, ids, _ = detector.detectMarkers(preprocessed)
             if ids is None:
                 continue
             found: dict[int, tuple[float, float]] = {}
+            valid_ids = set(config.ARUCO_MARKER_POSITIONS_MM.keys())  # only 0-3
             for corner_group, marker_id in zip(corners, ids.flatten()):
+                mid = int(marker_id)
+                if mid not in valid_ids:
+                    continue  # reject false-positive markers outside expected set
                 pts = corner_group[0]
                 cx = float(pts[:, 0].mean())
                 cy = float(pts[:, 1].mean())
-                found[int(marker_id)] = (cx, cy)
+                found[mid] = (cx, cy)
             if len(found) > len(best):
                 best = found
             if len(best) >= 4:

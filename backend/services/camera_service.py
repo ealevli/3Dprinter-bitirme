@@ -20,8 +20,12 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
-# Use AVFoundation on macOS for better camera compatibility.
-_BACKEND = cv2.CAP_AVFOUNDATION if platform.system() == "Darwin" else cv2.CAP_ANY
+if platform.system() == "Darwin":
+    _BACKEND = cv2.CAP_AVFOUNDATION
+elif platform.system() == "Windows":
+    _BACKEND = cv2.CAP_DSHOW
+else:
+    _BACKEND = cv2.CAP_ANY
 
 
 class CameraService:
