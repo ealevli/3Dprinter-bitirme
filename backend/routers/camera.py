@@ -11,12 +11,15 @@ Endpoints:
 
 import asyncio
 import base64
+import logging
 import os
 import sys
 
 import cv2
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
@@ -138,27 +141,32 @@ async def calibrate():
 
         def _best_frame_calibrate():
             """
-            Take up to 5 frames and calibrate with the one where the most
-            ArUco markers are visible. Avoids single-frame bad captures.
+            Take up to 8 fresh frames and calibrate with the one where the
+            most ArUco markers are visible.
             """
             import time
-            from services.calibration import detect_markers, compute_homography, save_calibration
+            from services.calibration import detect_markers
 
             best_frame = None
             best_count = 0
 
-            for _ in range(5):
-                frame = camera_service.capture_frame()
+            for attempt in range(8):
+                # capture_fresh_frame waits for a frame newer than now,
+                # so we never reuse a stale/frozen frame.
+                frame = camera_service.capture_fresh_frame(timeout=2.0)
                 if frame is None:
-                    time.sleep(0.1)
+                    logger.warning("Calibrate attempt %d: no fresh frame", attempt)
                     continue
                 markers = detect_markers(frame)
+                logger.info("Calibrate attempt %d: found markers %s", attempt, list(markers.keys()))
                 if len(markers) > best_count:
                     best_count = len(markers)
                     best_frame = frame
                 if best_count >= 4:
                     break
-                time.sleep(0.15)  # wait for next frame from capture thread
+                time.sleep(0.1)
+
+            logger.info("Calibrate best result: %d markers found", best_count)
 
             if best_frame is None:
                 return {"success": False, "matrix": None,

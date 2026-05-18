@@ -23,7 +23,10 @@ import config
 if platform.system() == "Darwin":
     _BACKEND = cv2.CAP_AVFOUNDATION
 elif platform.system() == "Windows":
-    _BACKEND = cv2.CAP_DSHOW
+    # CAP_MSMF (Windows Media Foundation) is more reliable than CAP_DSHOW
+    # on Windows 10/11 — DirectShow fails with "can't be used to capture by index"
+    # on many USB cameras.
+    _BACKEND = cv2.CAP_MSMF
 else:
     _BACKEND = cv2.CAP_ANY
 
@@ -41,6 +44,7 @@ class CameraService:
         self._lifecycle_lock = threading.Lock()   # guards _cap open/close
         self._frame_lock = threading.Lock()        # guards _latest_frame only
         self._latest_frame: Optional[np.ndarray] = None
+        self._frame_time: float = 0.0              # timestamp of latest stored frame
         self._capture_thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -55,11 +59,14 @@ class CameraService:
                 return True
             cap = cv2.VideoCapture(index, _BACKEND)
             if not cap.isOpened():
-                return False
+                # CAP_MSMF failed — fall back to CAP_ANY
+                cap = cv2.VideoCapture(index, cv2.CAP_ANY)
+                if not cap.isOpened():
+                    return False
             # Reduce internal buffer to 1 frame so we always get the latest image.
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            # Discard warm-up frames (macOS AVFoundation starts with black frames).
-            for _ in range(10):
+            # Discard warm-up frames — USB cameras often return black frames at start.
+            for _ in range(30):
                 cap.read()
             self._cap = cap
             self._running = True
@@ -112,8 +119,9 @@ class CameraService:
 
             with self._frame_lock:
                 self._latest_frame = frame
-
-            time.sleep(1 / 30)  # ~30 fps cap
+                self._frame_time = time.time()
+            # No sleep — cap.read() already blocks at the camera's natural FPS.
+            # An extra sleep fills the DirectShow/MSMF buffer with stale frames.
 
     # ── Frame access ──────────────────────────────────────────────────────────
 
@@ -123,6 +131,20 @@ class CameraService:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
+
+    def capture_fresh_frame(self, timeout: float = 3.0) -> Optional[np.ndarray]:
+        """Wait for a frame captured AFTER this call was made, then return it.
+
+        Prevents calibration from reusing a stale/frozen frame.
+        """
+        deadline = time.time() + timeout
+        t_start = time.time()
+        while time.time() < deadline:
+            with self._frame_lock:
+                if self._frame_time > t_start and self._latest_frame is not None:
+                    return self._latest_frame.copy()
+            time.sleep(0.05)
+        return None
 
     def frame_to_jpeg(self, frame: np.ndarray) -> bytes:
         """Encode an OpenCV BGR frame to JPEG bytes."""
