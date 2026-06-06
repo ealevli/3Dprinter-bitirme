@@ -59,6 +59,28 @@ def _port_hint(p) -> str:
     return "unknown"
 
 
+@router.get("/calibration_debug")
+async def calibration_debug():
+    """Return calibration matrix + config marker positions for debugging 0×0 mm issues."""
+    from services.calibration import load_calibration, pixel_to_mm
+    import numpy as np
+    H = load_calibration()
+    if H is None:
+        return {"calibrated": False, "message": "calibration.json bulunamadı"}
+    # Test: map a grid of points to see if H is sane
+    test_pts = [(100, 100), (320, 240), (500, 350), (640, 480)]
+    mapped = []
+    for px, py in test_pts:
+        mx, my = pixel_to_mm(px, py, H)
+        mapped.append({"px": px, "py": py, "mm_x": round(mx, 2), "mm_y": round(my, 2)})
+    return {
+        "calibrated": True,
+        "H": H.tolist(),
+        "marker_positions_mm": {str(k): v for k, v in config.ARUCO_MARKER_POSITIONS_MM.items()},
+        "test_mapping": mapped,
+    }
+
+
 @router.get("/ports")
 async def list_ports():
     """Return all detected serial ports with type hints to aid port selection."""

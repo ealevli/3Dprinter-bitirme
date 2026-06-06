@@ -18,6 +18,7 @@ Contour post-processing:
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Optional
@@ -28,6 +29,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from services.calibration import load_calibration, pixel_to_mm, detect_markers
+
+log = logging.getLogger(__name__)
 
 # Downscale all CV operations to this width for speed.
 # Contour coordinates are scaled back to original resolution before returning.
@@ -353,10 +356,22 @@ def detect_part(frame: np.ndarray, use_ml: bool = False) -> dict:
 
     H = load_calibration()
     calibrated = H is not None
+
+    if not calibrated:
+        log.warning("[detect] No calibration found — contour_mm will be empty")
+    else:
+        log.debug("[detect] H matrix loaded: %s", H.tolist())
+
     contour_mm = (
         [list(pixel_to_mm(pt[0], pt[1], H)) for pt in contour_px]
         if calibrated else []
     )
+
+    if calibrated:
+        log.info("[detect] frame=%dx%d  scale=%.2f  contour_px=%s  contour_mm=%s",
+                 frame_w, frame_h, scale,
+                 [[round(p[0]), round(p[1])] for p in contour_px],
+                 [[round(m[0], 1), round(m[1], 1)] for m in contour_mm])
 
     class_name: Optional[str] = None
     confidence: Optional[float] = None
