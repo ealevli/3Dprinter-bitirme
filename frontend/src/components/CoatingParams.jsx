@@ -258,6 +258,65 @@ export default function CoatingParams({ params, onChange }) {
         </div>
       </div>
 
+      {/* XY Kalibrasyon Düzeltmesi */}
+      <div className="border-t border-slate-700 pt-3 space-y-2">
+        <div className="flex items-center gap-1">
+          <p className="text-xs font-semibold text-amber-400">XY Kalibrasyon Düzeltmesi</p>
+          <InfoTooltip info={{
+            color: "amber",
+            short: "Yazıcı parçanın yanına değil biraz uzağa gidiyorsa buradan düzelt",
+            detail: [
+              "ArUco kalibrasyonu mükemmel olmayabilir → yazıcı sistematik olarak kayabilir",
+              "Y Düzeltme > 0: yazıcı parçanın önüne (düşük Y'ye) gidiyorsa artır",
+              "Y Düzeltme < 0: yazıcı parçanın arkasına (yüksek Y'ye) gidiyorsa azalt",
+              "X Düzeltme: sol/sağ kayma için aynı mantık",
+              "Adım adım: 2mm dene → daha iyi mi? → artır/azalt",
+              "Kalıcı çözüm: Ayarlar → marker pozisyonlarını ölç → yeniden kalibre et",
+            ],
+          }} />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { key: "x_offset_mm", label: "X Düzeltme (mm)" },
+            { key: "y_offset_mm", label: "Y Düzeltme (mm)" },
+          ].map(({ key, label }) => (
+            <div key={key}>
+              <label className="text-xs text-slate-400 block mb-1">{label}</label>
+              <input
+                type="number"
+                value={params[key] ?? 0}
+                min={-30}
+                max={30}
+                step={0.5}
+                onChange={(e) => set(key, parseFloat(e.target.value) || 0)}
+                className="w-full bg-slate-700 rounded px-2 py-1 text-sm text-right"
+              />
+              <div className="flex gap-1 mt-1 flex-wrap">
+                {[-5, -2, -1, 0, 1, 2, 5].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => set(key, v)}
+                    className={`flex-1 text-xs py-0.5 rounded border transition-colors ${
+                      (params[key] ?? 0) === v
+                        ? "border-amber-500 text-amber-300 bg-amber-950"
+                        : "border-slate-600 text-slate-400 hover:border-slate-400"
+                    }`}
+                  >
+                    {v > 0 ? `+${v}` : v}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {((params.x_offset_mm ?? 0) !== 0 || (params.y_offset_mm ?? 0) !== 0) && (
+          <p className="text-xs text-amber-400 bg-amber-950 border border-amber-800 rounded p-2">
+            ⚠ Aktif: X{params.x_offset_mm >= 0 ? "+" : ""}{params.x_offset_mm ?? 0}mm,
+            Y{params.y_offset_mm >= 0 ? "+" : ""}{params.y_offset_mm ?? 0}mm — tüm koordinatlara ekleniyor.
+          </p>
+        )}
+      </div>
+
       {/* Sıfırla */}
       <button
         onClick={() =>
@@ -268,6 +327,8 @@ export default function CoatingParams({ params, onChange }) {
             travel_rate: 1500,
             band_thickness: 1.0,
             pattern_type: "zigzag",
+            x_offset_mm: 0.0,
+            y_offset_mm: 0.0,
           })
         }
         className="w-full text-xs py-1 rounded border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200 transition-colors"

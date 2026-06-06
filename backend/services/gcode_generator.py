@@ -53,6 +53,14 @@ class CoatingParams:
     travel_rate: int  = 1500         # mm/min — rapid travel
     band_thickness: float = 1.0      # mm — tape under the part
     pattern_type: PatternType = "zigzag"
+    # ── Coordinate correction offsets ─────────────────────────────────────────
+    # x_offset_mm / y_offset_mm:  added to every X/Y coordinate in the output.
+    # Use these to compensate for systematic ArUco calibration errors without
+    # needing a full recalibration:
+    #   • Printer always arrives N mm to the left of the part → set x_offset_mm = +N
+    #   • Printer always arrives N mm short in Y           → set y_offset_mm = +N
+    x_offset_mm: float = 0.0
+    y_offset_mm: float = 0.0
 
 
 # ── Z levels ─────────────────────────────────────────────────────────────────
@@ -411,6 +419,16 @@ def generate_gcode(
         start_gcode = DEFAULT_START_GCODE
     if end_gcode is None:
         end_gcode = DEFAULT_END_GCODE
+
+    # Apply XY coordinate correction offsets.
+    # Compensates for systematic ArUco calibration errors without recalibration:
+    #   y_offset_mm > 0  → shifts entire path further in Y (printer was arriving too early)
+    #   x_offset_mm > 0  → shifts entire path further in X
+    if params.x_offset_mm != 0.0 or params.y_offset_mm != 0.0:
+        contour_mm = [
+            [pt[0] + params.x_offset_mm, pt[1] + params.y_offset_mm]
+            for pt in contour_mm
+        ]
 
     # Build Shapely polygon
     poly = Polygon([(pt[0], pt[1]) for pt in contour_mm])

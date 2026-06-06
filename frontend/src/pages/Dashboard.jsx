@@ -113,6 +113,8 @@ export default function Dashboard() {
     travel_rate: 1500,
     band_thickness: 1.0,
     pattern_type: "zigzag",
+    x_offset_mm: 0.0,
+    y_offset_mm: 0.0,
   });
 
   const addLog = useCallback((msg) => {

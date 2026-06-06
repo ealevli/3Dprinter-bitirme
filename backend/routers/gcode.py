@@ -35,6 +35,8 @@ class GenerateRequest(BaseModel):
     travel_rate: int = 1500
     band_thickness: float = 1.0
     pattern_type: str = "zigzag"
+    x_offset_mm: float = 0.0   # XY correction: add to all X coords (compensates calibration error)
+    y_offset_mm: float = 0.0   # XY correction: add to all Y coords (compensates calibration error)
     start_gcode: str | None = None
     end_gcode: str | None = None
 
@@ -64,6 +66,8 @@ async def generate(req: GenerateRequest):
         travel_rate=req.travel_rate,
         band_thickness=req.band_thickness,
         pattern_type=req.pattern_type,  # type: ignore[arg-type]
+        x_offset_mm=req.x_offset_mm,
+        y_offset_mm=req.y_offset_mm,
     )
     return generate_gcode(req.contour_mm, params, req.start_gcode, req.end_gcode)
 
