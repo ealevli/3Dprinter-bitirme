@@ -322,7 +322,7 @@ export default function CoatingParams({ params, onChange }) {
         onClick={() =>
           onChange({
             line_spacing: 1.0,
-            z_offset: 0.3,
+            z_offset: 2.0,
             feed_rate: 600,
             travel_rate: 1500,
             band_thickness: 1.0,

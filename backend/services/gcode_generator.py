@@ -49,7 +49,10 @@ M84 X Y E ; Motorlari devre disi birak (Z hariç)"""
 @dataclass
 class CoatingParams:
     line_spacing: float = 1.0       # mm between fill lines
-    z_offset: float   = 0.3         # mm above part surface
+    z_offset: float   = 2.0         # mm above part surface
+    # NOTE: if M851 Z is not recalibrated for the custom coating head,
+    # increase this value until the nozzle clears the part surface.
+    # Rule of thumb: z_offset = (desired_gap) + (coating_head_below_original_nozzle_mm)
     feed_rate: int    = 600          # mm/min — coating move
     travel_rate: int  = 1500         # mm/min — rapid travel
     band_thickness: float = 1.0      # mm — tape under the part
