@@ -202,6 +202,75 @@ class PrinterSerial:
                     except serial.SerialException:
                         pass
 
+    # ── BLTouch single-point probe ────────────────────────────────────────────
+
+    def probe_z(self, x: float, y: float, timeout_s: float = 30.0) -> Optional[float]:
+        """
+        Send G30 single-point BLTouch probe and return the probed surface Z value.
+
+        After G28, Marlin sets Z=0 at the nozzle position with M851 Z-offset applied.
+        G30 at the part center probes the actual surface (including tape/part height)
+        and reports:  "Bed X: 117.50 Y: 117.50 Z: 0.123"
+
+        The returned Z is the nozzle coordinate at the surface.
+        Moving to Z = probed_z + gap places the nozzle exactly `gap` mm above it.
+        Returns None on failure or timeout.
+        """
+        cmd = f"G30 X{x:.3f} Y{y:.3f}"
+        log.info("[printer] probe_z: %s", cmd)
+
+        with self._write_lock:
+            if not self._ser or not self._ser.is_open:
+                self._last_error = "Yazici bagli degil"
+                log.warning("[printer] probe_z: not connected")
+                return None
+            try:
+                self._ser.write((cmd + "\n").encode())
+            except serial.SerialException as exc:
+                self._last_error = str(exc)
+                log.error("[printer] probe_z write error: %s", exc)
+                return None
+
+        probed_z: Optional[float] = None
+        deadline = time.time() + timeout_s
+
+        while time.time() < deadline:
+            try:
+                with self._read_lock:
+                    if not self._ser or not self._ser.is_open:
+                        return None
+                    resp = self._ser.readline().decode(errors="replace").strip()
+            except serial.SerialException as exc:
+                self._last_error = str(exc)
+                return None
+
+            if not resp:
+                continue
+
+            log.debug("[printer] probe_z rx: %r", resp)
+
+            # Parse: "Bed X: 117.50 Y: 117.50 Z: 0.123"
+            if "Bed" in resp and "Z:" in resp:
+                try:
+                    z_str = resp.split("Z:")[-1].strip().split()[0]
+                    probed_z = float(z_str)
+                    log.info("[printer] probe_z: surface Z = %.3f mm", probed_z)
+                except (ValueError, IndexError):
+                    log.warning("[printer] probe_z: could not parse Z from %r", resp)
+
+            if resp.startswith("ok"):
+                log.info("[printer] probe_z: done — Z = %s", probed_z)
+                return probed_z
+
+            if resp.upper().startswith("ERROR") or resp.startswith("!!"):
+                self._last_error = resp
+                log.error("[printer] probe_z Marlin error: %r", resp)
+                return None
+
+        self._last_error = f"G30 probe timeout ({timeout_s:.0f}s)"
+        log.warning("[printer] probe_z: %s", self._last_error)
+        return None
+
     # ── Job management ────────────────────────────────────────────────────────
 
     def send_gcode(self, gcode: str, job_id: str) -> None:

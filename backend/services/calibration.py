@@ -152,6 +152,20 @@ def pixel_to_mm(
     return float(result[0] / result[2]), float(result[1] / result[2])
 
 
+def mm_to_pixel(
+    x_mm: float, y_mm: float, H: np.ndarray
+) -> tuple[float, float]:
+    """Transform a printer mm coordinate to camera pixel using the inverse of H.
+
+    H maps pixel → mm.  H⁻¹ maps mm → pixel.
+    Used to draw overlays (bed boundary, crosshair) on camera frames.
+    """
+    H_inv = np.linalg.inv(H)
+    pt = np.array([x_mm, y_mm, 1.0], dtype=np.float64)
+    result = H_inv @ pt
+    return float(result[0] / result[2]), float(result[1] / result[2])
+
+
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 def save_calibration(H: np.ndarray) -> None:

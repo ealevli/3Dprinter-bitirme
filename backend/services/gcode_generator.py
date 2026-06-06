@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 from shapely.geometry import LineString, Polygon
 
@@ -45,6 +45,13 @@ G0 F300 Z{z_travel_end} ; Nozzle'i yukari kaldir
 G28 X Y ; X ve Y eksenlerini sifirla (home)
 M84 X Y E ; Motorlari devre disi birak (Z hariç)"""
 
+# Start sequence used by probe_and_send — G28 and G30 already executed before
+# this G-code is sent, so we skip homing and jump straight to safe Z + coating.
+POST_PROBE_START_GCODE = """\
+G90 ; Mutlak konum modu (G28 zaten yapildi, probed_z bake edildi)
+G0 F{travel_rate} Z{z_travel} ; Guvenli yukseklige git
+G0 F{travel_rate} X{part_cx} Y{part_cy} ; Parca merkezine git"""
+
 
 @dataclass
 class CoatingParams:
@@ -57,6 +64,11 @@ class CoatingParams:
     travel_rate: int  = 1500         # mm/min — rapid travel
     band_thickness: float = 1.0      # mm — tape under the part
     pattern_type: PatternType = "zigzag"
+    # ── BLTouch probe result ──────────────────────────────────────────────────
+    # Set by probe_and_send after G30 probing.
+    # BLTouch mode : z_coat = probed_z + z_offset  (gap above measured surface)
+    # Manual mode  : z_coat = band_thickness + z_offset  (fixed, no probe)
+    probed_z: Optional[float] = None
     # ── Coordinate correction offsets ─────────────────────────────────────────
     # x_offset_mm / y_offset_mm:  added to every X/Y coordinate in the output.
     # Use these to compensate for systematic ArUco calibration errors without
@@ -80,7 +92,13 @@ class CoatingParams:
 # ── Z levels ─────────────────────────────────────────────────────────────────
 
 def _z_coat(p: CoatingParams) -> float:
-    """Z during coating (tape + nozzle gap)."""
+    """Z during coating.
+
+    BLTouch mode (probed_z set): nozzle gap above the measured surface.
+    Manual mode  (probed_z None): fixed tape + z_offset calculation.
+    """
+    if p.probed_z is not None:
+        return round(p.probed_z + p.z_offset, 3)
     return round(p.z_offset + p.band_thickness, 3)
 
 def _z_travel(p: CoatingParams) -> float:
@@ -520,7 +538,11 @@ def generate_gcode(
         "; === 3D Printer Coating System — Auto-generated G-code ===",
         f"; Pattern   : {params.pattern_type}",
         f"; Spacing   : {params.line_spacing} mm",
-        f"; Z coating : {zc} mm  (tape {params.band_thickness} + offset {params.z_offset})",
+        f"; Z coating : {zc} mm  " + (
+            f"(BLTouch probe {params.probed_z:.3f} + gap {params.z_offset})"
+            if params.probed_z is not None
+            else f"(tape {params.band_thickness} + offset {params.z_offset})"
+        ),
         f"; Feed      : {params.feed_rate} mm/min",
         "; ---",
     ]

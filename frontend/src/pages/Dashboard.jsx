@@ -108,7 +108,7 @@ export default function Dashboard() {
 
   const [params, setParams] = useState({
     line_spacing: 1.0,
-    z_offset: 2.0,
+    z_offset: 0.3,
     feed_rate: 600,
     travel_rate: 1500,
     band_thickness: 1.0,
@@ -203,33 +203,26 @@ export default function Dashboard() {
   // ── Başlat ──────────────────────────────────────────────────────────────
   async function handleStart() {
     const det = detectionRef.current;
-    if (!det?.contour_px?.length) {
-      addLog("Önce Tara'ya basın.");
-      return;
-    }
     if (!det?.contour_mm?.length) {
-      addLog("Kalibrasyon gerekli — Ayarlar → Kalibre Et.");
+      addLog("Önce Tara'ya basın (kalibrasyon + tarama gerekli).");
       return;
     }
     setIsSending(true);
     pumpStartedRef.current = false;
     try {
-      // Always regenerate gcode with current params so z_offset and other
-      // changes are guaranteed to be included before sending to printer.
+      // probe_and_send: G28 home → G30 BLTouch probe → fresh G-code with real Z → send
       const prm = paramsRef.current;
-      const start_gcode = localStorage.getItem("cfg_start_gcode") || undefined;
-      const end_gcode   = localStorage.getItem("cfg_end_gcode")   || undefined;
-      const genRes = await axios.post("/gcode/generate", {
+      const res = await axios.post("/gcode/probe_and_send", {
         contour_mm: det.contour_mm,
         ...prm,
-        start_gcode,
-        end_gcode,
       });
-      setGcodeResult(genRes.data);
-      gcodeResultRef.current = genRes.data; // ref'i hemen güncelle (render bekleme)
+      addLog(res.data.message);  // "BLTouch Z=2.34 mm → kaplama Z=2.64 mm"
 
-      const res = await axios.post("/gcode/send", { gcode: genRes.data.gcode });
-      addLog(`G-code gönderimi başladı. Job: ${res.data.job_id}`);
+      // Store pump_start_line so auto-pump tracking works correctly
+      const pumpMeta = { pump_start_line: res.data.pump_start_line };
+      setGcodeResult(r => r ? { ...r, ...pumpMeta } : pumpMeta);
+      gcodeResultRef.current = { ...(gcodeResultRef.current ?? {}), ...pumpMeta };
+
       pollStatus();
     } catch (err) {
       addLog(`Gönderim hatası: ${err.response?.data?.detail ?? err.message}`);
@@ -352,7 +345,7 @@ export default function Dashboard() {
                   >✕</button>
                 </div>
               </div>
-              <div style={{ height: 240 }}>
+              <div style={{ height: 300 }}>
                 <GCodePreview
                   paths={gcodeResult.paths ?? []}
                   wallPaths={gcodeResult.wall_paths ?? []}
@@ -427,7 +420,8 @@ export default function Dashboard() {
             ) : (
               <button
                 onClick={handleStart}
-                disabled={!gcodeResult}
+                disabled={!detection?.contour_mm?.length}
+                title="G28 home → BLTouch Z probe → G-code gönder"
                 className="flex-1 py-2 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50 font-semibold text-sm transition-colors"
               >
                 Başlat

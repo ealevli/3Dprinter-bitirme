@@ -154,6 +154,53 @@ class CameraService:
             _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             return buffer.tobytes()
 
+    # ── Bed overlay ───────────────────────────────────────────────────────────
+
+    def _draw_bed_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """Draw 235x235 mm bed boundary + center crosshair on the frame.
+
+        Uses the saved homography (mm to pixel via H-inv) so the overlay
+        aligns with the physical printer bed even if the camera is tilted.
+        Returns the original frame unchanged if calibration is not available.
+        """
+        try:
+            from services.calibration import load_calibration, mm_to_pixel
+        except ImportError:
+            return frame
+
+        H = load_calibration()
+        if H is None:
+            return frame
+
+        out = frame.copy()
+        BED_W, BED_H = 235.0, 235.0
+
+        # Bed boundary
+        corners_mm = [(0.0, 0.0), (BED_W, 0.0), (BED_W, BED_H), (0.0, BED_H)]
+        try:
+            corners_px = [mm_to_pixel(x, y, H) for x, y in corners_mm]
+        except Exception:
+            return frame
+
+        pts = np.array([(int(x), int(y)) for x, y in corners_px], dtype=np.int32)
+        cv2.polylines(out, [pts.reshape(-1, 1, 2)], True, (0, 220, 220), 2)
+
+        # Center crosshair at (117.5, 117.5) mm — BLTouch probe point
+        try:
+            cx_px, cy_px = mm_to_pixel(BED_W / 2, BED_H / 2, H)
+        except Exception:
+            return out
+        cx_px, cy_px = int(cx_px), int(cy_px)
+
+        arm = 35
+        cv2.line(out, (cx_px - arm, cy_px), (cx_px + arm, cy_px), (0, 80, 255), 2)
+        cv2.line(out, (cx_px, cy_px - arm), (cx_px, cy_px + arm), (0, 80, 255), 2)
+        cv2.circle(out, (cx_px, cy_px), 5, (0, 80, 255), -1)
+        cv2.putText(out, "Merkez / BLTouch", (cx_px + 8, cy_px - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 80, 255), 1, cv2.LINE_AA)
+
+        return out
+
     # ── MJPEG async stream ────────────────────────────────────────────────────
 
     async def mjpeg_generator(self) -> AsyncGenerator[bytes, None]:
@@ -172,6 +219,8 @@ class CameraService:
             if frame is None:
                 await asyncio.sleep(0.05)
                 continue
+
+            frame = self._draw_bed_overlay(frame)
 
             jpeg = self.frame_to_jpeg(frame)
             yield (

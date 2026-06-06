@@ -1,26 +1,37 @@
 /**
- * GCodePreview — Cura-style canvas preview.
+ * GCodePreview — Cura-style canvas preview with full bed view.
  *
- * Shows:
- *   - Green dashed line  : part contour (from detection)
- *   - Cyan line          : WALL-OUTER perimeter pass
- *   - Blue lines         : infill (zigzag / spiral / parallel)
+ * Always shows the 235x235 mm printer bed so the user can see where
+ * the detected part sits on the bed and where the BLTouch will probe.
  *
- * paths     : list of SEGMENTS — each segment is [{x,y}, ...] coating pass.
- *             Zigzag/parallel → 2-point segments [start, end].
- *             Spiral          → multi-point ring segments.
- * wallPaths : flat list [{x,y}] — perimeter polyline.
- * contourMm : raw detection contour [[x,y]].
+ * Layers (bottom to top):
+ *   1. Bed background (dark gray fill)
+ *   2. Grid lines at 50 mm intervals (very subtle)
+ *   3. Center crosshair at (117.5, 117.5) — BLTouch probe point
+ *   4. Part contour (green dashed)
+ *   5. WALL-OUTER perimeter (cyan)
+ *   6. Infill segments (blue)
+ *   7. Axis labels + legend
  *
- * Aspect ratio is always preserved (no stretching).
+ * Props:
+ *   paths     : list of segments [[{x,y},...], ...] — infill coating passes
+ *   wallPaths : flat list [{x,y}] — perimeter polyline
+ *   contourMm : raw detection contour [[x,y]]
+ *   bedW      : bed width in mm  (default 235)
+ *   bedH      : bed height in mm (default 235)
  */
 
 import { useEffect, useRef } from "react";
 
+const BED_W_DEFAULT = 235;
+const BED_H_DEFAULT = 235;
+
 export default function GCodePreview({
-  paths     = [],   // list of segments: [[{x,y},...], ...]
-  wallPaths = [],   // flat list: [{x,y}, ...]
-  contourMm = [],   // raw detection contour: [[x,y], ...]
+  paths     = [],
+  wallPaths = [],
+  contourMm = [],
+  bedW      = BED_W_DEFAULT,
+  bedH      = BED_H_DEFAULT,
 }) {
   const canvasRef = useRef(null);
 
@@ -35,46 +46,83 @@ export default function GCodePreview({
     ctx.fillStyle = "#0f172a";
     ctx.fillRect(0, 0, W, H);
 
-    const hasData = paths.length > 0 || wallPaths.length > 0 || contourMm.length > 0;
-    if (!hasData) return;
-
-    // ── Collect all XY points for unified bounding box ────────────────────
-    const allX = [];
-    const allY = [];
-
-    // paths is now list-of-segments: [[{x,y},...], ...]
-    paths.forEach(seg => seg.forEach(p => { allX.push(p.x); allY.push(p.y); }));
-    wallPaths.forEach(p => { allX.push(p.x); allY.push(p.y); });
-    contourMm.forEach(([x, y]) => { allX.push(x); allY.push(y); });
-
-    if (allX.length === 0) return;
-
-    const minX = Math.min(...allX);
-    const maxX = Math.max(...allX);
-    const minY = Math.min(...allY);
-    const maxY = Math.max(...allY);
-    const rangeX = maxX - minX || 1;
-    const rangeY = maxY - minY || 1;
-
-    // Uniform scale — keep aspect ratio
-    const pad    = 28;
-    const scaleX = (W - 2 * pad) / rangeX;
-    const scaleY = (H - 2 * pad) / rangeY;
+    // ── Coordinate transform: printer mm → canvas px ──────────────────
+    // Fixed to full bed — no zoom-to-fit, so part position is always correct.
+    const pad    = 30;
+    const scaleX = (W - 2 * pad) / bedW;
+    const scaleY = (H - 2 * pad) / bedH;
     const scale  = Math.min(scaleX, scaleY);
 
-    const drawW = rangeX * scale;
-    const drawH = rangeY * scale;
+    const drawW = bedW * scale;
+    const drawH = bedH * scale;
     const offX  = pad + (W - 2 * pad - drawW) / 2;
     const offY  = pad + (H - 2 * pad - drawH) / 2;
 
-    /** Printer mm → canvas px  (Y-flipped: printer Y up, canvas Y down) */
+    // Y-flip: printer Y increases upward, canvas Y increases downward
     const tc = (x, y) => ({
-      cx: offX + (x - minX) * scale,
-      cy: offY + drawH - (y - minY) * scale,
+      cx: offX + x * scale,
+      cy: offY + drawH - y * scale,
     });
 
-    // ── Helper: stroke an array of {x,y} as a polyline ───────────────────
-    const strokePolyline = (pts, color, width = 1, dash = []) => {
+    // ── 1. Bed fill ────────────────────────────────────────────────────
+    ctx.fillStyle = "#1e293b";
+    const bedTL = tc(0, bedH);
+    ctx.fillRect(bedTL.cx, bedTL.cy, drawW, drawH);
+
+    // ── 2. Subtle grid lines every 50 mm ──────────────────────────────
+    ctx.strokeStyle = "#334155";
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 4]);
+    for (let mm = 0; mm <= bedW; mm += 50) {
+      const { cx: gx1, cy: gy1 } = tc(mm, 0);
+      const { cx: gx2, cy: gy2 } = tc(mm, bedH);
+      ctx.beginPath(); ctx.moveTo(gx1, gy1); ctx.lineTo(gx2, gy2); ctx.stroke();
+    }
+    for (let mm = 0; mm <= bedH; mm += 50) {
+      const { cx: gx1, cy: gy1 } = tc(0, mm);
+      const { cx: gx2, cy: gy2 } = tc(bedW, mm);
+      ctx.beginPath(); ctx.moveTo(gx1, gy1); ctx.lineTo(gx2, gy2); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // ── 3. Bed boundary ───────────────────────────────────────────────
+    ctx.strokeStyle = "#475569";
+    ctx.lineWidth = 1.5;
+    const bl = tc(0, 0), br = tc(bedW, 0), tr2 = tc(bedW, bedH), tl = tc(0, bedH);
+    ctx.beginPath();
+    ctx.moveTo(tl.cx, tl.cy);
+    ctx.lineTo(tr2.cx, tr2.cy);
+    ctx.lineTo(br.cx, br.cy);
+    ctx.lineTo(bl.cx, bl.cy);
+    ctx.closePath();
+    ctx.stroke();
+
+    // ── 4. Center crosshair + BLTouch probe point ─────────────────────
+    const { cx: ccx, cy: ccy } = tc(bedW / 2, bedH / 2);
+    const arm = 18;
+
+    // Crosshair lines
+    ctx.strokeStyle = "#f97316";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ccx - arm, ccy); ctx.lineTo(ccx + arm, ccy);
+    ctx.moveTo(ccx, ccy - arm); ctx.lineTo(ccx, ccy + arm);
+    ctx.stroke();
+
+    // Center dot
+    ctx.fillStyle = "#f97316";
+    ctx.beginPath();
+    ctx.arc(ccx, ccy, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = "#fb923c";
+    ctx.font = "9px monospace";
+    ctx.fillText("BLTouch", ccx + 6, ccy - 5);
+    ctx.fillText(`(${bedW / 2}, ${bedH / 2})`, ccx + 6, ccy + 7);
+
+    // ── Helper: stroke a flat {x,y} array as polyline ─────────────────
+    const strokePolyline = (pts, color, width = 1.5, dash = []) => {
       if (pts.length < 2) return;
       ctx.strokeStyle = color;
       ctx.lineWidth   = width;
@@ -88,25 +136,22 @@ export default function GCodePreview({
       ctx.setLineDash([]);
     };
 
-    // ── 1. Part contour outline (green dashed) ────────────────────────────
+    // ── 5. Part contour (green dashed) ────────────────────────────────
     if (contourMm.length >= 3) {
       const pts = contourMm.map(([x, y]) => ({ x, y }));
       strokePolyline([...pts, pts[0]], "#22c55e", 1.5, [5, 4]);
     }
 
-    // ── 2. Wall-outer path (cyan) — flat polyline ─────────────────────────
+    // ── 6. Wall-outer (cyan) ──────────────────────────────────────────
     if (wallPaths.length >= 2) {
       strokePolyline(wallPaths, "#06b6d4", 1.5);
     }
 
-    // ── 3. Infill — paths is list of segments ─────────────────────────────
-    // Each segment is a polyline: [travelStart, pt1, pt2, ...] for one coating pass.
-    // Zigzag/parallel → 2-pt segments. Spiral → multi-pt ring segments.
+    // ── 7. Infill segments (blue) ─────────────────────────────────────
     if (paths.length > 0) {
       ctx.strokeStyle = "#3b82f6";
       ctx.lineWidth   = 1.5;
       ctx.setLineDash([]);
-
       paths.forEach(seg => {
         if (seg.length < 2) return;
         ctx.beginPath();
@@ -118,49 +163,42 @@ export default function GCodePreview({
       });
     }
 
-    // ── 4. Axis labels ────────────────────────────────────────────────────
+    // ── 8. Corner labels ──────────────────────────────────────────────
     ctx.fillStyle = "#475569";
-    ctx.font      = "10px monospace";
-    ctx.fillText(`X ${minX.toFixed(1)}`, offX, H - 6);
-    ctx.fillText(`${maxX.toFixed(1)} mm`, offX + drawW - 34, H - 6);
-    ctx.fillText(`${maxY.toFixed(1)}`, 4, offY + 8);
-    ctx.fillText(`${minY.toFixed(1)} mm`, 4, offY + drawH);
+    ctx.font = "9px monospace";
+    const lbl = tc(0, 0);
+    ctx.fillText("0,0", lbl.cx + 2, lbl.cy - 3);
+    const rbr = tc(bedW, 0);
+    ctx.fillText(`${bedW},0`, rbr.cx - 28, rbr.cy - 3);
 
-    // ── 5. Legend ─────────────────────────────────────────────────────────
+    // ── 9. Legend ─────────────────────────────────────────────────────
     const legend = [
+      { color: "#f97316", label: "BLTouch merkezi" },
       { color: "#22c55e", label: "Kontur" },
       { color: "#06b6d4", label: "Dış çevre" },
       { color: "#3b82f6", label: "Dolgu" },
     ];
     legend.forEach(({ color, label }, i) => {
-      const lx = W - 80;
+      const lx = W - 90;
       const ly = 12 + i * 16;
       ctx.strokeStyle = color;
-      ctx.lineWidth   = 2;
+      ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(lx, ly);
       ctx.lineTo(lx + 14, ly);
       ctx.stroke();
       ctx.fillStyle = "#94a3b8";
-      ctx.font      = "9px sans-serif";
+      ctx.font = "9px sans-serif";
       ctx.fillText(label, lx + 18, ly + 4);
     });
 
-  }, [paths, wallPaths, contourMm]);
-
-  if (paths.length === 0 && wallPaths.length === 0) {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-slate-500 text-sm">
-        G-code önizleme için &quot;Önizle&quot; butonuna basın.
-      </div>
-    );
-  }
+  }, [paths, wallPaths, contourMm, bedW, bedH]);
 
   return (
     <canvas
       ref={canvasRef}
       width={620}
-      height={240}
+      height={300}
       className="w-full h-full"
     />
   );
