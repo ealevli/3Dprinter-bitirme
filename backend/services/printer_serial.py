@@ -116,6 +116,13 @@ class PrinterSerial:
                 self._last_error = "Yazıcı bağlı değil"
                 log.warning("[printer] send_line: not connected")
                 return False
+            # Check BEFORE writing so no new command goes out after stop is requested.
+            # This is the key race-condition fix: stop_event is set by emergency_stop()
+            # before it tries to send M410, so if we check here we're guaranteed
+            # the M410 (sent below in the read loop) is the LAST thing written.
+            if self._stop_event.is_set():
+                log.info("[printer] send_line: stop event already set — skipping write")
+                return False
             try:
                 self._ser.write((line.strip() + "\n").encode())
                 log.debug("[printer] sent: %r — waiting for ok…", line.strip())
@@ -128,7 +135,15 @@ class PrinterSerial:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             if self._stop_event.is_set():
-                log.info("[printer] send_line: stop event set, aborting")
+                # Send M410 (quickstop) here — AFTER the write lock is released
+                # and BEFORE any new command. This is the safe injection point.
+                log.info("[printer] send_line: stop event — sending M410 quickstop")
+                with self._write_lock:
+                    if self._ser and self._ser.is_open:
+                        try:
+                            self._ser.write(b"M410\n")
+                        except serial.SerialException:
+                            pass
                 return False
             try:
                 with self._read_lock:
@@ -165,16 +180,27 @@ class PrinterSerial:
         return False
 
     def emergency_stop(self) -> None:
-        """Stop the current job and halt printer movement."""
-        log.info("[printer] emergency_stop()")
+        """
+        Stop the current job and halt printer movement.
+
+        Design: only set the stop event here.  M410 (quickstop) is injected by
+        send_line() at the first safe point after its write lock is released.
+        This prevents the race where M410 arrives BEFORE the last queued move,
+        which would cause Marlin to stop — then immediately re-queue that move
+        when send_line() writes it after M410.
+        """
+        log.info("[printer] emergency_stop() — setting stop event")
         self._stopped_by_user = True
         self._stop_event.set()
-        with self._write_lock:
-            if self._ser and self._ser.is_open:
-                try:
-                    self._ser.write(b"M410\n")
-                except serial.SerialException:
-                    pass
+        # If no job thread is running (e.g. jog move), send M410 directly.
+        if self._job_thread is None or not self._job_thread.is_alive():
+            log.info("[printer] no active job thread — sending M410 directly")
+            with self._write_lock:
+                if self._ser and self._ser.is_open:
+                    try:
+                        self._ser.write(b"M410\n")
+                    except serial.SerialException:
+                        pass
 
     # ── Job management ────────────────────────────────────────────────────────
 
@@ -197,19 +223,22 @@ class PrinterSerial:
         self._job_thread.start()
 
     def _send_worker(self, lines: list[str]) -> None:
-        for i, line in enumerate(lines):
-            if self._stop_event.is_set():
-                self._status = "stopped"
-                log.info("[printer] job stopped by user at line %d/%d", i, len(lines))
-                return
-            ok = self.send_line(line)
-            self._current_line = i + 1
-            if not ok:
-                self._status = "stopped" if self._stopped_by_user else "error"
-                log.error("[printer] job failed at line %d: %s", i + 1, self._last_error)
-                return
-        self._status = "done"
-        log.info("[printer] job done — %d lines sent", len(lines))
+        try:
+            for i, line in enumerate(lines):
+                if self._stop_event.is_set():
+                    self._status = "stopped"
+                    log.info("[printer] job stopped by user at line %d/%d", i, len(lines))
+                    return
+                ok = self.send_line(line)
+                self._current_line = i + 1
+                if not ok:
+                    self._status = "stopped" if self._stopped_by_user else "error"
+                    log.error("[printer] job failed at line %d: %s", i + 1, self._last_error)
+                    return
+            self._status = "done"
+            log.info("[printer] job done — %d lines sent", len(lines))
+        finally:
+            self._job_thread = None   # allow emergency_stop() to detect no active job
 
     def get_status(self) -> dict:
         elapsed = round(time.time() - self._start_time, 1) if self._start_time else 0
