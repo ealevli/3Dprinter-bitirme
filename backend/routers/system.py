@@ -7,6 +7,7 @@ Endpoints:
   POST /system/config   → update runtime config (ports, baudrate, ArUco positions…)
 """
 
+import asyncio
 import json
 import os
 from typing import Any
@@ -41,24 +42,61 @@ async def get_config():
     }
 
 
+def _port_hint(p) -> str:
+    """Classify a serial port so the UI can warn about wrong selections."""
+    desc = (p.description or "").lower()
+    hwid = (p.hwid or "").lower()
+    mfr  = (p.manufacturer or "").lower()
+
+    if "bluetooth" in desc or "bluetooth" in mfr or "bthmodem" in hwid:
+        return "bluetooth"   # Never an Arduino over USB
+
+    # Common USB-Serial chips used by Arduinos and Ender-3 alike
+    arduino_chips = ("ch340", "ch341", "cp210", "ftdi", "ft232", "arduino")
+    if any(chip in desc or chip in hwid or chip in mfr for chip in arduino_chips):
+        return "usb_serial"  # Likely a real Arduino or printer
+
+    return "unknown"
+
+
 @router.get("/ports")
 async def list_ports():
-    """Return all detected serial ports on the host machine."""
-    ports = [
-        {"device": p.device, "description": p.description}
-        for p in serial.tools.list_ports.comports()
-    ]
+    """Return all detected serial ports with type hints to aid port selection."""
+    ports = []
+    for p in serial.tools.list_ports.comports():
+        hint = _port_hint(p)
+        ports.append({
+            "device": p.device,
+            "description": p.description,
+            "hint": hint,
+            # Bluetooth ports almost never work as Arduino; flag them
+            "warning": "Bluetooth portu — Arduino için kullanmayın" if hint == "bluetooth" else None,
+        })
     return {"ports": ports}
 
 
 @router.get("/status")
 async def status():
     """Return connection status of camera, printer, and pump."""
+    import asyncio
     calibration_ready = load_calibration() is not None
+
+    # Verify pump connection — guard with a timeout so a hung Arduino can't
+    # freeze the status page.
+    if pump_serial.is_connected:
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(pump_serial.get_status),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            pass
+    pump_ok = pump_serial.is_connected
+
     return {
         "camera": "ok" if camera_service.is_open else "disconnected",
         "printer": "ok" if printer_serial.is_connected else "disconnected",
-        "pump": "ok" if pump_serial.is_connected else "disconnected",
+        "pump": "ok" if pump_ok else "disconnected",
         "calibration": "ok" if calibration_ready else "required",
     }
 
@@ -66,8 +104,8 @@ async def status():
 @router.post("/connect_printer")
 async def connect_printer():
     """Disconnect and reconnect the printer using the current config port."""
-    printer_serial.disconnect()
-    ok = printer_serial.connect()
+    await asyncio.to_thread(printer_serial.disconnect)
+    ok = await asyncio.to_thread(printer_serial.connect)
     if not ok:
         raise HTTPException(
             status_code=503,

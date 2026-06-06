@@ -100,13 +100,21 @@ if ($needsInstall) {
     Write-Host "[INFO]  node_modules hazir." -ForegroundColor Cyan
 }
 
-# ── 6. Backend baslat ─────────────────────────────────────────────────────────
+# ── 6. Backend baslat (auto-restart) ─────────────────────────────────────────
 Write-Host "[INFO]  Backend baslatiliyor (http://localhost:8000)..." -ForegroundColor Cyan
 $backendLog = "$ROOT\.backend.log"
-Start-Process powershell -ArgumentList `
-    "-NoExit", "-Command",
-    "& '$VENV\Scripts\activate.ps1'; Set-Location '$BACKEND'; python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload 2>&1 | Tee-Object -FilePath '$backendLog'" `
-    -WindowStyle Minimized
+$restartCmd = @"
+& '$VENV\Scripts\activate.ps1'
+Set-Location '$BACKEND'
+while (`$true) {
+    `$t = Get-Date
+    python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload 2>&1 | Tee-Object -FilePath '$backendLog'
+    if (((Get-Date) - `$t).TotalSeconds -lt 5) { Write-Host '[ERROR] Cok hizli cakti, durduruluyor.' -ForegroundColor Red; break }
+    Write-Host '[WARN] Backend cakti, yeniden baslatiliyor...' -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+}
+"@
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $restartCmd -WindowStyle Minimized
 
 # Backend hazir olana kadar bekle (max 15s)
 Write-Host "[INFO]  Backend hazir olana kadar bekleniyor..." -ForegroundColor Cyan

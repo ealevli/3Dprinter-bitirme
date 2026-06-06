@@ -99,6 +99,32 @@ def _morph_clean(img: np.ndarray, close_k: int = 9, open_k: int = 5) -> np.ndarr
     return img
 
 
+def _otsu_threshold(values: np.ndarray) -> float:
+    """Pure-numpy Otsu threshold — avoids cv2.threshold on 1D arrays (segfault risk)."""
+    hist = np.bincount(values.ravel(), minlength=256).astype(np.float64)
+    total = hist.sum()
+    if total == 0:
+        return 25.0
+    hist /= total
+    bins = np.arange(256, dtype=np.float64)
+    best_thresh, best_var = 0, 0.0
+    w0 = 0.0
+    mu0_sum = 0.0
+    for t in range(256):
+        w0 += hist[t]
+        mu0_sum += t * hist[t]
+        w1 = 1.0 - w0
+        if w0 < 1e-10 or w1 < 1e-10:
+            continue
+        mu0 = mu0_sum / w0
+        mu1 = (np.dot(bins, hist) - mu0_sum) / w1
+        var = w0 * w1 * (mu0 - mu1) ** 2
+        if var > best_var:
+            best_var = var
+            best_thresh = t
+    return float(best_thresh)
+
+
 # ── Pass A: white paper + non-white part ─────────────────────────────────────
 
 def _find_paper_roi(frame: np.ndarray, mask: np.ndarray) -> Optional[tuple]:
@@ -181,11 +207,7 @@ def _find_part_bg_subtraction(
     # Use Otsu's method on the masked bed area to find the optimal difference threshold
     diff_vals = blurred[mask > 0]
     if len(diff_vals) > 100:
-        # Reshape to 2D to prevent OpenCV from hanging on 1D arrays!
-        diff_img = diff_vals.copy().reshape(-1, 1)
-        otsu, _ = cv2.threshold(diff_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        # Cap the threshold so we don't miss faint differences, but don't go too low (noise)
-        threshold = max(15.0, min(float(otsu), 50.0))
+        threshold = max(15.0, min(_otsu_threshold(diff_vals), 50.0))
     else:
         threshold = 25.0
 
@@ -234,11 +256,7 @@ def _find_part_direct(
     # Compute Otsu threshold on glare-free pixels only
     masked_vals = no_glare[mask > 0]
     if len(masked_vals) > 100:
-        masked_img = masked_vals.copy().reshape(-1, 1)
-        otsu_thresh, _ = cv2.threshold(masked_img, 0, 255,
-                                       cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        # Use at most 60 so faint parts (grey on brown) aren't missed
-        threshold = min(float(otsu_thresh), 60.0)
+        threshold = min(_otsu_threshold(masked_vals), 60.0)
     else:
         threshold = 35.0
 

@@ -65,6 +65,16 @@ export default function Dashboard() {
 
   const [bgExists, setBgExists] = useState(false);
 
+  // Pompa oto-başlatma: PumpControls'dan senkronize edilir
+  const autoStartPumpRef = useRef(localStorage.getItem("pump_auto_start") === "true");
+  const autoStartRpmRef  = useRef(150);
+  const pumpStartedRef   = useRef(false); // kaplama sırasında bir kez başlatıldı mı
+
+  function handleAutoStartChange(enabled, rpm) {
+    autoStartPumpRef.current = enabled;
+    autoStartRpmRef.current  = rpm;
+  }
+
   useEffect(() => {
     axios.get("/camera/background").then(r => setBgExists(r.data.exists)).catch(() => {});
   }, []);
@@ -137,9 +147,11 @@ export default function Dashboard() {
   const paramsRef    = useRef(params);
   const detectionRef = useRef(detection);
   const gcodeOpenRef = useRef(!!gcodeResult);
+  const gcodeResultRef = useRef(gcodeResult);
   paramsRef.current    = params;
   detectionRef.current = detection;
   gcodeOpenRef.current = !!gcodeResult;
+  gcodeResultRef.current = gcodeResult;
 
   // Önizleme üretici — hem manuel hem otomatik çağrı için
   const generatePreview = useCallback(async (silent = false) => {
@@ -185,13 +197,33 @@ export default function Dashboard() {
 
   // ── Başlat ──────────────────────────────────────────────────────────────
   async function handleStart() {
-    if (!gcodeResult?.gcode) {
-      addLog("Önce önizleme oluşturun.");
+    const det = detectionRef.current;
+    if (!det?.contour_px?.length) {
+      addLog("Önce Tara'ya basın.");
+      return;
+    }
+    if (!det?.contour_mm?.length) {
+      addLog("Kalibrasyon gerekli — Ayarlar → Kalibre Et.");
       return;
     }
     setIsSending(true);
+    pumpStartedRef.current = false;
     try {
-      const res = await axios.post("/gcode/send", { gcode: gcodeResult.gcode });
+      // Always regenerate gcode with current params so z_offset and other
+      // changes are guaranteed to be included before sending to printer.
+      const prm = paramsRef.current;
+      const start_gcode = localStorage.getItem("cfg_start_gcode") || undefined;
+      const end_gcode   = localStorage.getItem("cfg_end_gcode")   || undefined;
+      const genRes = await axios.post("/gcode/generate", {
+        contour_mm: det.contour_mm,
+        ...prm,
+        start_gcode,
+        end_gcode,
+      });
+      setGcodeResult(genRes.data);
+      gcodeResultRef.current = genRes.data; // ref'i hemen güncelle (render bekleme)
+
+      const res = await axios.post("/gcode/send", { gcode: genRes.data.gcode });
       addLog(`G-code gönderimi başladı. Job: ${res.data.job_id}`);
       pollStatus();
     } catch (err) {
@@ -207,6 +239,28 @@ export default function Dashboard() {
         const res = await axios.get("/gcode/status");
         setJobStatus(res.data);
         const st = res.data.status;
+
+        // Kalibrasyon bitti, kaplama başladı → pompayı çalıştır
+        const pumpLine = gcodeResultRef.current?.pump_start_line;
+        if (
+          autoStartPumpRef.current &&
+          !pumpStartedRef.current &&
+          pumpLine != null &&
+          res.data.current_line >= pumpLine &&
+          st === "running"
+        ) {
+          pumpStartedRef.current = true;
+          axios.post("/pump/start", { rpm: autoStartRpmRef.current })
+            .then(() => addLog(`Pompa kaplama başlangıcında otomatik çalıştırıldı (${autoStartRpmRef.current} adım/s).`))
+            .catch((e) => addLog(`Pompa oto-başlatma hatası: ${e.response?.data?.detail ?? e.message}`));
+        }
+        const stopPumpIfAuto = () => {
+          if (autoStartPumpRef.current) {
+            axios.post("/pump/stop")
+              .then(() => addLog("Pompa otomatik durduruldu."))
+              .catch(() => {});
+          }
+        };
         const stop = () => {
           setIsSending(false);
           clearInterval(pollIntervalRef.current);
@@ -214,13 +268,16 @@ export default function Dashboard() {
         };
         if (st === "done") {
           addLog("Kaplama tamamlandı.");
+          stopPumpIfAuto();
           stop();
         } else if (st === "stopped") {
           addLog(`Durduruldu (${res.data.current_line}/${res.data.total_lines} satır gönderildi).`);
+          stopPumpIfAuto();
           stop();
         } else if (st === "error") {
           const detail = res.data.last_error ? ` — ${res.data.last_error}` : "";
           addLog(`Gönderim hatası (satır ${res.data.current_line}/${res.data.total_lines})${detail}`);
+          stopPumpIfAuto();
           stop();
         } else if (st === "idle" && res.data.total_lines === 0) {
           // Backend restarted mid-send (hot reload / crash) — unlock UI
@@ -241,6 +298,11 @@ export default function Dashboard() {
       pollIntervalRef.current = null;
     }
     await axios.post("/gcode/stop").catch(() => {});
+    if (autoStartPumpRef.current) {
+      axios.post("/pump/stop")
+        .then(() => addLog("Pompa durduruldu."))
+        .catch(() => {});
+    }
     setIsSending(false);
     addLog("Durdurma komutu gönderildi.");
   }
@@ -370,9 +432,13 @@ export default function Dashboard() {
 
           {/* Progress bar */}
           {jobStatus && isSending && (
-            <div className="bg-slate-800 rounded p-2">
+            <div className="bg-slate-800 rounded p-2 space-y-1">
               <div className="flex justify-between text-xs text-slate-400 mb-1">
-                <span>Gönderiliyor…</span>
+                <span>
+                  {jobStatus.current_line === 0
+                    ? "⏳ G28 homing bekleniyor (30-90s)…"
+                    : "Gönderiliyor…"}
+                </span>
                 <span>
                   {jobStatus.current_line} / {jobStatus.total_lines} satır
                 </span>
@@ -387,13 +453,18 @@ export default function Dashboard() {
                   }}
                 />
               </div>
+              {jobStatus.last_error && (
+                <p className="text-xs text-red-400 font-mono truncate">
+                  Hata: {jobStatus.last_error}
+                </p>
+              )}
             </div>
           )}
         </div>
 
         {/* Right: controls */}
         <div className="w-64 flex flex-col gap-3">
-          <PumpControls onLog={addLog} />
+          <PumpControls onLog={addLog} onAutoStartChange={handleAutoStartChange} />
           <PrinterJog onLog={addLog} />
           <CoatingParams params={params} onChange={setParams} />
         </div>

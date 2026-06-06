@@ -43,6 +43,7 @@ class CameraService:
         self._cap: Optional[cv2.VideoCapture] = None
         self._lifecycle_lock = threading.Lock()   # guards _cap open/close
         self._frame_lock = threading.Lock()        # guards _latest_frame only
+        self._encode_lock = threading.Lock()       # guards cv2.imencode (not thread-safe on Windows)
         self._latest_frame: Optional[np.ndarray] = None
         self._frame_time: float = 0.0              # timestamp of latest stored frame
         self._capture_thread: Optional[threading.Thread] = None
@@ -98,30 +99,31 @@ class CameraService:
     # ── Background capture thread ──────────────────────────────────────────────
 
     def _capture_loop(self) -> None:
-        """Continuously read frames from the camera into _latest_frame.
-
-        Frame reads happen OUTSIDE the lifecycle lock so a slow/frozen camera
-        never blocks other threads trying to open/close the camera.
-        """
+        """Continuously read frames from the camera into _latest_frame."""
         while True:
-            # Check running flag (under lifecycle lock) — grab cap reference.
             with self._lifecycle_lock:
                 if not self._running or self._cap is None:
                     break
-                cap = self._cap  # local ref; safe to use outside lock
+                cap = self._cap
 
-            ret, frame = cap.read()   # blocking — but NOT holding any lock
+            try:
+                ret, frame = cap.read()
+            except Exception:
+                time.sleep(0.1)
+                continue
 
-            if not ret:
-                # Camera stopped returning frames; wait briefly and retry.
+            if not ret or frame is None:
                 time.sleep(0.05)
                 continue
 
+            frame_copy = frame.copy()
             with self._frame_lock:
-                self._latest_frame = frame
+                self._latest_frame = frame_copy
                 self._frame_time = time.time()
-            # No sleep — cap.read() already blocks at the camera's natural FPS.
-            # An extra sleep fills the DirectShow/MSMF buffer with stale frames.
+
+            # Throttle to ~20 fps max — prevents MSMF buffer overflow on Windows
+            # which causes segfaults when detection also reads from the camera.
+            time.sleep(0.05)
 
     # ── Frame access ──────────────────────────────────────────────────────────
 
@@ -147,9 +149,10 @@ class CameraService:
         return None
 
     def frame_to_jpeg(self, frame: np.ndarray) -> bytes:
-        """Encode an OpenCV BGR frame to JPEG bytes."""
-        _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        return buffer.tobytes()
+        """Encode an OpenCV BGR frame to JPEG bytes (thread-safe)."""
+        with self._encode_lock:
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return buffer.tobytes()
 
     # ── MJPEG async stream ────────────────────────────────────────────────────
 

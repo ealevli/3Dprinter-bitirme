@@ -32,10 +32,15 @@ router = APIRouter()
 _cam_op_sem = asyncio.Semaphore(1)
 
 
-def _ensure_camera() -> None:
-    """Open the camera if it is not already open; raise 503 on failure."""
+async def _ensure_camera() -> None:
+    """Open the camera if it is not already open; raise 503 on failure.
+
+    camera_service.open() calls cap.read() 30 times for warm-up — that's
+    potentially seconds of blocking. Always run it in a thread executor.
+    """
     if not camera_service.is_open:
-        ok = camera_service.open()
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(None, camera_service.open)
         if not ok:
             raise HTTPException(
                 status_code=503,
@@ -46,7 +51,7 @@ def _ensure_camera() -> None:
 @router.get("/stream")
 async def stream():
     """MJPEG stream."""
-    _ensure_camera()
+    await _ensure_camera()
     return StreamingResponse(
         camera_service.mjpeg_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -56,11 +61,12 @@ async def stream():
 @router.get("/frame")
 async def frame():
     """Return the latest camera frame as a raw JPEG (polled by frontend)."""
-    _ensure_camera()
+    await _ensure_camera()
     img = camera_service.capture_frame()
     if img is None:
         raise HTTPException(status_code=503, detail="Frame yok.")
-    jpeg = camera_service.frame_to_jpeg(img)
+    loop = asyncio.get_event_loop()
+    jpeg = await loop.run_in_executor(None, camera_service.frame_to_jpeg, img)
     return Response(
         content=jpeg,
         media_type="image/jpeg",
@@ -71,11 +77,12 @@ async def frame():
 @router.post("/capture")
 async def capture():
     """Capture a single frame and return it as a base64-encoded JPEG."""
-    _ensure_camera()
+    await _ensure_camera()
     img = camera_service.capture_frame()
     if img is None:
         raise HTTPException(status_code=500, detail="Frame alınamadı.")
-    jpeg = camera_service.frame_to_jpeg(img)
+    loop = asyncio.get_event_loop()
+    jpeg = await loop.run_in_executor(None, camera_service.frame_to_jpeg, img)
     encoded = base64.b64encode(jpeg).decode()
     return {"image": encoded, "format": "jpeg"}
 
@@ -134,7 +141,7 @@ async def calibrate():
     if _cam_op_sem.locked():
         raise HTTPException(status_code=429, detail="Başka bir kamera işlemi çalışıyor.")
 
-    _ensure_camera()
+    await _ensure_camera()
 
     async with _cam_op_sem:
         loop = asyncio.get_event_loop()
@@ -190,7 +197,7 @@ async def calibrate():
 @router.post("/background")
 async def save_background():
     """Capture a single frame and save it as the background for subtraction."""
-    _ensure_camera()
+    await _ensure_camera()
     img = camera_service.capture_frame()
     if img is None:
         raise HTTPException(status_code=500, detail="Frame alınamadı.")

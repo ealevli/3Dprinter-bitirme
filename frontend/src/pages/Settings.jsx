@@ -192,7 +192,9 @@ export default function Settings() {
               <option value="">-- Seçin --</option>
               {ports.map((p) => (
                 <option key={p.device} value={p.device}>
-                  {p.device} — {p.description}
+                  {p.hint === "bluetooth"
+                    ? `⚠ ${p.device} — ${p.description} [Bluetooth — Arduino için uygun değil]`
+                    : `${p.device} — ${p.description}`}
                 </option>
               ))}
             </select>
@@ -223,6 +225,19 @@ export default function Settings() {
                 )}
               </div>
             )}
+            {/* Bluetooth port warning for Arduino */}
+            {key === "pump_port" &&
+              config.pump_port &&
+              ports.find((p) => p.device === config.pump_port)?.hint === "bluetooth" && (
+                <div className="mt-2 bg-amber-950 border border-amber-700 rounded p-2 text-xs text-amber-300 space-y-1">
+                  <p className="font-semibold">⚠ Bluetooth port seçtiniz!</p>
+                  <p>
+                    Bu port Arduino ile çalışmaz. Arduino'yu USB kabloyla bağlayın ve
+                    listede <strong>CH340</strong> veya <strong>CP210x</strong> yazan portu seçin.
+                    Yeni port görünmüyorsa "Yenile" butonuna basın.
+                  </p>
+                </div>
+              )}
             {/* Arduino quick-connect test — always visible for pump port */}
             {key === "pump_port" && (
               <div className="mt-2 flex items-center gap-2 flex-wrap">
@@ -317,36 +332,68 @@ export default function Settings() {
       {/* ArUco marker positions */}
       <div className="bg-slate-800 rounded-lg p-4 space-y-3">
         <h2 className="font-semibold text-sm text-slate-300">ArUco Marker Pozisyonları (mm)</h2>
+        <p className="text-xs text-slate-500">
+          Yazıcının <span className="text-slate-300">önü</span> = sana bakan taraf (Y küçük).
+          Her marker'ın fiziksel konumunu gir.
+        </p>
+
+        {/* Visual layout diagram */}
+        <div className="grid grid-cols-3 gap-1 text-xs text-center text-slate-400 mb-1">
+          <span>← Sol</span>
+          <span className="text-slate-600">— Arka (Y büyük) —</span>
+          <span>Sağ →</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 border border-slate-700 rounded p-2 text-xs text-slate-500 mb-2">
+          <div className="text-center">ID {Object.entries(markerPositions).find(([, [x, y]]) => x < 100 && y > 100)?.[0] ?? "?"} — sol arka</div>
+          <div className="text-center">ID {Object.entries(markerPositions).find(([, [x, y]]) => x > 100 && y > 100)?.[0] ?? "?"} — sağ arka</div>
+          <div className="text-center">ID {Object.entries(markerPositions).find(([, [x, y]]) => x < 100 && y < 100)?.[0] ?? "?"} — sol ön ★</div>
+          <div className="text-center">ID {Object.entries(markerPositions).find(([, [x, y]]) => x > 100 && y < 100)?.[0] ?? "?"} — sağ ön</div>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
-          {Object.entries(markerPositions).map(([id, [x, y]]) => (
-            <div key={id} className="flex items-center gap-2 text-sm">
-              <span className="text-slate-400 w-16">Marker {id}</span>
-              <input
-                type="number"
-                value={x}
-                onChange={(e) =>
-                  setMarkerPositions({
-                    ...markerPositions,
-                    [id]: [parseFloat(e.target.value), y],
-                  })
-                }
-                className="w-20 bg-slate-700 rounded px-2 py-1 text-sm"
-                placeholder="X"
-              />
-              <input
-                type="number"
-                value={y}
-                onChange={(e) =>
-                  setMarkerPositions({
-                    ...markerPositions,
-                    [id]: [x, parseFloat(e.target.value)],
-                  })
-                }
-                className="w-20 bg-slate-700 rounded px-2 py-1 text-sm"
-                placeholder="Y"
-              />
-            </div>
-          ))}
+          {Object.entries(markerPositions).map(([id, [x, y]]) => {
+            const corner =
+              x < 100 && y < 100 ? "sol ön ★" :
+              x > 100 && y < 100 ? "sağ ön" :
+              x < 100 && y > 100 ? "sol arka" :
+                                   "sağ arka";
+            return (
+              <div key={id} className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-300 text-xs font-semibold w-16">Marker {id}</span>
+                  <span className="text-xs text-slate-500">({corner})</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-500 w-4">X</label>
+                  <input
+                    type="number"
+                    value={x}
+                    onChange={(e) =>
+                      setMarkerPositions({
+                        ...markerPositions,
+                        [id]: [parseFloat(e.target.value), y],
+                      })
+                    }
+                    className="w-20 bg-slate-700 rounded px-2 py-1 text-sm"
+                    placeholder="X mm"
+                  />
+                  <label className="text-xs text-slate-500 w-4">Y</label>
+                  <input
+                    type="number"
+                    value={y}
+                    onChange={(e) =>
+                      setMarkerPositions({
+                        ...markerPositions,
+                        [id]: [x, parseFloat(e.target.value)],
+                      })
+                    }
+                    className="w-20 bg-slate-700 rounded px-2 py-1 text-sm"
+                    placeholder="Y mm"
+                  />
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

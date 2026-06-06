@@ -8,6 +8,8 @@ export default function PrinterJog({ onLog }) {
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [rawCmd, setRawCmd] = useState("");
+  const [zOffsetMode, setZOffsetMode] = useState(false);
+  const [babystepAccum, setBabystepAccum] = useState(0);
 
   async function move(axis, sign) {
     if (busy) return;
@@ -33,6 +35,35 @@ export default function PrinterJog({ onLog }) {
       onLog?.(res.data.message);
     } catch (e) {
       onLog?.(`Home hatası: ${e.response?.data?.detail ?? e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function babystep(delta) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await axios.post("/jog/babystep", { delta });
+      setBabystepAccum((prev) => Math.round((prev + delta) * 1000) / 1000);
+      onLog?.(`Babystep Z${delta > 0 ? "+" : ""}${delta} mm`);
+    } catch (e) {
+      onLog?.(`Babystep hatası: ${e.response?.data?.detail ?? e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setSurface() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await axios.post("/jog/set_surface");
+      setBabystepAccum(0);
+      setZOffsetMode(false);
+      onLog?.(`✓ ${res.data.message}`);
+    } catch (e) {
+      onLog?.(`Z yüzey hatası: ${e.response?.data?.detail ?? e.message}`);
     } finally {
       setBusy(false);
     }
@@ -133,6 +164,58 @@ export default function PrinterJog({ onLog }) {
       >
         ⌂ Tümünü Home'la (G28)
       </button>
+
+      {/* Z Offset Sihirbazı */}
+      <div className="border-t border-slate-700 pt-2 space-y-2">
+        <button
+          onClick={() => { setZOffsetMode((v) => !v); setBabystepAccum(0); }}
+          className={`w-full py-1.5 rounded text-xs font-semibold transition-colors ${
+            zOffsetMode ? "bg-orange-700 hover:bg-orange-600" : "bg-slate-700 hover:bg-slate-600"
+          }`}
+        >
+          {zOffsetMode ? "✕ Z Offset Modunu Kapat" : "⚙ Z Offset Ayarla"}
+        </button>
+
+        {zOffsetMode && (
+          <div className="bg-slate-900 rounded p-2 space-y-2">
+            <p className="text-xs text-slate-400">
+              Nozzle'ı <strong className="text-white">Z jog</strong> ile parçaya değene kadar indir,
+              sonra <strong className="text-orange-300">Yüzeyi Kaydet</strong>'e bas.
+            </p>
+
+            {/* Fine babystep buttons */}
+            <div className="space-y-1">
+              <p className="text-xs text-slate-500">İnce ayar (babystep):</p>
+              <div className="grid grid-cols-4 gap-1">
+                {[+0.1, +0.05, -0.05, -0.1].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => babystep(d)}
+                    disabled={busy}
+                    className="py-1 rounded text-xs font-mono bg-slate-700 hover:bg-slate-600 disabled:opacity-40"
+                  >
+                    {d > 0 ? "+" : ""}{d}
+                  </button>
+                ))}
+              </div>
+              {babystepAccum !== 0 && (
+                <p className="text-xs text-center text-cyan-400 font-mono">
+                  Toplam: {babystepAccum > 0 ? "+" : ""}{babystepAccum.toFixed(3)} mm
+                </p>
+              )}
+            </div>
+
+            {/* Set surface */}
+            <button
+              onClick={setSurface}
+              disabled={busy}
+              className="w-full py-1.5 rounded text-xs font-semibold bg-orange-700 hover:bg-orange-600 disabled:opacity-40"
+            >
+              ✓ Nozzle Yüzeye Değdi — Bunu Z=0 Kaydet
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Raw G-code input */}
       <div className="flex gap-1">

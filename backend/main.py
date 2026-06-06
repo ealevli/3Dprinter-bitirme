@@ -3,6 +3,24 @@ FastAPI entry point for the 3D Printer Coating System.
 Registers all routers and configures CORS for the React frontend.
 """
 
+import faulthandler
+import logging
+import os
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+# Keep noisy third-party loggers quiet
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+logging.getLogger("multipart").setLevel(logging.WARNING)
+
+# Write C-level crash tracebacks to a file next to the backend log.
+_crash_log = os.path.join(os.path.dirname(__file__), "..", "crash.log")
+faulthandler.enable(open(_crash_log, "w"), all_threads=True)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

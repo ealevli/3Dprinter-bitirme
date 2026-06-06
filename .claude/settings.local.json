@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(anthropic-skills:pdf)",
+      "Skill(anthropic-skills:pdf:*)",
+      "Bash(ls \"C:\\\\Users\\\\yesir\\\\OneDrive\\\\Masaüstü\" 2>/dev/null | head -20; echo \"---\"; ls \"C:\\\\Users\\\\yesir\\\\Desktop\" 2>/dev/null | head -5)",
+      "Bash(mkdir \"C:\\\\Users\\\\yesir\\\\OneDrive\\\\Masaüstü\\\\sahibinden-bot\")",
+      "Bash(mkdir \"C:\\\\Users\\\\yesir\\\\OneDrive\\\\Masaüstü\\\\sahibinden-bot\\\\templates\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

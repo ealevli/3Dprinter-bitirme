@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
 
-export default function PumpControls({ onLog }) {
+export default function PumpControls({ onLog, onAutoStartChange }) {
   const [rpm,        setRpm]        = useState(150);
   const [running,    setRunning]    = useState(false);
   const [connected,  setConnected]  = useState(false);
@@ -12,9 +12,19 @@ export default function PumpControls({ onLog }) {
   const [direction,  setDirection]  = useState("fwd");   // "fwd" | "rev"
   const [priming,    setPriming]    = useState(false);
   const [primeSteps, setPrimeSteps] = useState(500);
+  const [autoStart,  setAutoStart]  = useState(
+    () => localStorage.getItem("pump_auto_start") === "true"
+  );
 
   // Debounce için: slider bırakılınca (pointerUp) gönder
   const pendingRpm = useRef(rpm);
+
+  function handleAutoStartToggle() {
+    const next = !autoStart;
+    setAutoStart(next);
+    localStorage.setItem("pump_auto_start", String(next));
+    onAutoStartChange?.(next, rpm);
+  }
 
   useEffect(() => {
     fetchStatus();
@@ -86,6 +96,7 @@ export default function PumpControls({ onLog }) {
     if (running) {
       await axios.post("/pump/speed", { rpm: pendingRpm.current }).catch(() => {});
     }
+    onAutoStartChange?.(autoStart, pendingRpm.current);
   }
 
   async function handleDirectionToggle() {
@@ -175,6 +186,32 @@ export default function PumpControls({ onLog }) {
       {/* Bağlı */}
       {connected && (
         <>
+          {/* Otomatik başlatma toggle */}
+          <div
+            className={`flex items-center justify-between rounded px-3 py-2 border cursor-pointer select-none transition-colors ${
+              autoStart
+                ? "border-green-600 bg-green-950 text-green-300"
+                : "border-slate-600 bg-slate-700 text-slate-400"
+            }`}
+            onClick={handleAutoStartToggle}
+          >
+            <div>
+              <p className="text-xs font-semibold">Kaplama ile Oto-Başlat</p>
+              <p className="text-xs opacity-70">Başlat'a basınca pompa da çalışır</p>
+            </div>
+            <div
+              className={`w-9 h-5 rounded-full relative transition-colors ${
+                autoStart ? "bg-green-500" : "bg-slate-600"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                  autoStart ? "left-[18px]" : "left-0.5"
+                }`}
+              />
+            </div>
+          </div>
+
           {/* Hız slider */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">
@@ -183,7 +220,7 @@ export default function PumpControls({ onLog }) {
             <input
               type="range"
               min={10}
-              max={500}
+              max={3200}
               step={10}
               value={rpm}
               onChange={(e) => handleSliderChange(parseInt(e.target.value))}
@@ -193,7 +230,7 @@ export default function PumpControls({ onLog }) {
             />
             <div className="flex justify-between text-xs text-slate-500 mt-0.5">
               <span>10</span>
-              <span>500</span>
+              <span>3200</span>
             </div>
           </div>
 

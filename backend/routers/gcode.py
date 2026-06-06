@@ -9,6 +9,7 @@ Endpoints:
   POST /gcode/stop       → emergency stop
 """
 
+import asyncio
 import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -88,15 +89,15 @@ async def preview(req: SendRequest):
 async def send(req: SendRequest):
     """Begin sending G-code to the printer in a background thread."""
     if not printer_serial.is_connected:
-        ok = printer_serial.connect()
+        ok = await asyncio.to_thread(printer_serial.connect)
         if not ok:
             raise HTTPException(
                 status_code=503,
-                detail="Yazıcıya bağlanılamadı. Port ayarlarını kontrol edin.",
+                detail="Yazıcıya bağlanılamadı. Ayarlar sayfasından yazıcı portunu seçip bağlanın.",
             )
     job_id = str(uuid.uuid4())[:8]
     printer_serial.send_gcode(req.gcode, job_id)
-    return {"job_id": job_id, "message": "G-code gönderimi başladı."}
+    return {"job_id": job_id, "message": "G-code gönderimi başladı.", "total_lines": printer_serial._total_lines}
 
 
 @router.get("/status")

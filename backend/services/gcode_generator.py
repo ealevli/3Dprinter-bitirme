@@ -36,7 +36,7 @@ DEFAULT_START_GCODE = """\
 G28 X Y ; X ve Y eksenlerini sifirla
 G90 ; Mutlak konum modu
 G0 F{travel_rate} X{part_x} Y{part_y} ; Parca uzerine git
-G28 Z ; BLTouch ile Z eksenini parcanin bulundugu konumda sifirla
+G30 X{part_x} Y{part_y} ; BLTouch ile parca ustunde Z probing yap
 G0 F{travel_rate} Z{z_travel} ; Nozzle'i guvenli yukseklige kaldir"""
 
 DEFAULT_END_GCODE = """\
@@ -490,6 +490,23 @@ def generate_gcode(
     all_lines = header + wall + fill + footer
     gcode_str = "\n".join(all_lines)
 
+    # Find the first G1 move that has BOTH X and Y — that's the first actual
+    # coating move (nozzle at z_coat, dispensing liquid).  The pump should
+    # start exactly here, not during homing or rapid-travel.
+    exec_count = 0
+    pump_start_line = None
+    for line in all_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        exec_count += 1
+        upper = stripped.upper()
+        if upper.startswith("G1") and "X" in upper and "Y" in upper:
+            pump_start_line = exec_count
+            break
+    if pump_start_line is None:
+        pump_start_line = exec_count + 1  # fallback: end of file
+
     # ── Preview paths ─────────────────────────────────────────────────────────
 
     def _parse_flat(line_list: list[str]) -> list[dict]:
@@ -564,4 +581,5 @@ def generate_gcode(
         "estimated_time_s":   round(estimated_s, 1),
         "paths":              fill_segments,   # list[list[{x,y}]] — one sub-list per coating pass
         "wall_paths":         wall_paths,      # list[{x,y}] — perimeter polyline
+        "pump_start_line":    pump_start_line, # 1-indexed exec line where coating begins
     }
