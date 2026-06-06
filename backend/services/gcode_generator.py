@@ -33,11 +33,12 @@ PatternType = Literal["zigzag", "parallel", "spiral", "honeycomb", "crosshatch",
 # ── Default G-code sequences ──────────────────────────────────────────────────
 
 DEFAULT_START_GCODE = """\
-G28 X Y ; X ve Y eksenlerini sifirla
+G28 ; Tum eksenleri sifirla — Z dahil (BLTouch Z=0 noktasini bulur)
 G90 ; Mutlak konum modu
-G0 F{travel_rate} X{part_x} Y{part_y} ; Parca uzerine git
-G30 X{part_x} Y{part_y} ; BLTouch ile parca ustunde Z probing yap
-G0 F{travel_rate} Z{z_travel} ; Nozzle'i guvenli yukseklige kaldir"""
+G0 F{travel_rate} Z{z_travel} ; Once Z'yi guvenli yukseklige cek (nozzle yuzey surumlesin)
+G0 F{travel_rate} X{part_cx} Y{part_cy} ; Parca MERKEZINE git (XY, Z dokunmuyor)
+G30 X{part_cx} Y{part_cy} ; BLTouch ile parca merkezinde Z probing yap
+G0 F{travel_rate} Z{z_travel} ; Probing sonrasi Z'yi guvenli yukseklige geri kaldir"""
 
 DEFAULT_END_GCODE = """\
 G0 F300 Z{z_travel_end} ; Nozzle'i yukari kaldir
@@ -446,19 +447,25 @@ def generate_gcode(
     zt = _z_travel(params)
     zc = _z_coat(params)
 
-    # Compute part_x, part_y from first contour point (or centroid as fallback)
-    if contour_mm:
-        part_x, part_y = contour_mm[0][0], contour_mm[0][1]
-    else:
-        c = poly.centroid
-        part_x, part_y = c.x, c.y
+    # Always use polygon centroid for the probe/start position.
+    # Using the first contour point (a polygon corner) caused the BLTouch to
+    # probe a corner instead of the center, and also caused the nozzle to drag
+    # across the surface when Z was unknown after G28 X Y.
+    centroid = poly.centroid
+    part_cx = round(centroid.x, 3)
+    part_cy = round(centroid.y, 3)
+
+    # Keep part_x / part_y aliases for backward-compat with custom start G-codes
+    part_x, part_y = part_cx, part_cy
 
     z_travel_end = round(zt + 10.0, 3)
 
     # Build placeholder mapping
     placeholders = {
-        "part_x":      f"{part_x:.3f}",
-        "part_y":      f"{part_y:.3f}",
+        "part_cx":     f"{part_cx:.3f}",   # centroid X — use this for G30 probe
+        "part_cy":     f"{part_cy:.3f}",   # centroid Y
+        "part_x":      f"{part_x:.3f}",    # alias for part_cx (backward compat)
+        "part_y":      f"{part_y:.3f}",    # alias for part_cy
         "z_coat":      f"{zc:.3f}",
         "z_travel":    f"{zt:.3f}",
         "z_travel_end": f"{z_travel_end:.3f}",
