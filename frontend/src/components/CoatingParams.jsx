@@ -258,6 +258,52 @@ export default function CoatingParams({ params, onChange }) {
         </div>
       </div>
 
+      {/* Manuel Parça Boyutu */}
+      <div className="border-t border-slate-700 pt-3 space-y-2">
+        <div className="flex items-center gap-1">
+          <p className="text-xs font-semibold text-green-400">Manuel Parça Boyutu (mm)</p>
+          <InfoTooltip info={{
+            color: "green",
+            short: "Kamera ölçüsü yanlışsa cetvel ile ölçüp buraya gir",
+            detail: [
+              "İkisi de > 0 ise: tespit edilen kontur yerine bu boyutta dikdörtgen kullanılır",
+              "Merkez: kameranın tespit ettiği parça merkezi (konum değişmez)",
+              "Örn: 67mm × 42mm → yazıcı tam o boyutta kaplar",
+              "0 bırakırsan kamera tespiti kullanılır",
+              "Cetvel ile parçayı ölç → değerleri buraya gir → Önizle",
+            ],
+          }} />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { key: "manual_width_mm",  label: "Genişlik (mm)" },
+            { key: "manual_height_mm", label: "Yükseklik (mm)" },
+          ].map(({ key, label }) => (
+            <div key={key}>
+              <label className="text-xs text-slate-400 block mb-1">{label}</label>
+              <input
+                type="number"
+                value={params[key] ?? 0}
+                min={0}
+                max={220}
+                step={0.5}
+                onChange={(e) => set(key, parseFloat(e.target.value) || 0)}
+                className="w-full bg-slate-700 rounded px-2 py-1 text-sm text-right"
+                placeholder="0 = kamera"
+              />
+            </div>
+          ))}
+        </div>
+        {(params.manual_width_mm > 0 && params.manual_height_mm > 0) && (
+          <p className="text-xs text-green-400 bg-green-950 border border-green-800 rounded p-2">
+            ✓ Manuel boyut aktif: {params.manual_width_mm} × {params.manual_height_mm} mm dikdörtgen kullanılıyor.
+          </p>
+        )}
+        {(params.manual_width_mm > 0) !== (params.manual_height_mm > 0) && (
+          <p className="text-xs text-amber-400">⚠ İkisini de gir (genişlik VE yükseklik).</p>
+        )}
+      </div>
+
       {/* Kontur İçe Çekme */}
       <div className="border-t border-slate-700 pt-3 space-y-2">
         <div className="flex items-center gap-1">
@@ -380,6 +426,8 @@ export default function CoatingParams({ params, onChange }) {
             x_offset_mm: 0.0,
             y_offset_mm: 0.0,
             contour_inset_mm: 0.0,
+            manual_width_mm: 0.0,
+            manual_height_mm: 0.0,
           })
         }
         className="w-full text-xs py-1 rounded border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200 transition-colors"

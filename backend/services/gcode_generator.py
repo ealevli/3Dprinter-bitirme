@@ -67,10 +67,14 @@ class CoatingParams:
     y_offset_mm: float = 0.0
     # ── Contour margin (inset) ─────────────────────────────────────────────────
     # contour_inset_mm > 0 → shrink the detected polygon inward by this amount.
-    # Prevents coating the tape/edge holding the part and keeps liquid on-part.
-    # contour_inset_mm < 0 → expand outward (rarely useful).
-    # Typical value: 1.0–3.0 mm inset.
     contour_inset_mm: float = 0.0
+    # ── Manual size override ───────────────────────────────────────────────────
+    # When both > 0, ignore the detected polygon shape and use a rectangle of
+    # exactly these dimensions centered on the detected centroid.
+    # Use when camera detection gives wrong dimensions — measure the part with
+    # a ruler and enter exact values here.
+    manual_width_mm: float = 0.0   # 0 = use detected
+    manual_height_mm: float = 0.0  # 0 = use detected
 
 
 # ── Z levels ─────────────────────────────────────────────────────────────────
@@ -453,13 +457,28 @@ def generate_gcode(
             "wall_paths": [],
         }
 
-    # Apply contour inset (positive = shrink inward, stays on-part).
-    # Prevents coating the tape/edge holding the part.
+    # ── Manual size override ──────────────────────────────────────────────────
+    # If the user entered exact part dimensions, replace the detected polygon
+    # with a rectangle of exactly those dimensions centered on the centroid.
+    # This is the most reliable way to get correct coating bounds when camera
+    # detection over/under-estimates the part size.
+    if params.manual_width_mm > 0 and params.manual_height_mm > 0:
+        cx0 = poly.centroid.x
+        cy0 = poly.centroid.y
+        hw = params.manual_width_mm / 2.0
+        hh = params.manual_height_mm / 2.0
+        poly = Polygon([
+            (cx0 - hw, cy0 - hh),
+            (cx0 + hw, cy0 - hh),
+            (cx0 + hw, cy0 + hh),
+            (cx0 - hw, cy0 + hh),
+        ])
+
+    # ── Contour inset (uniform shrink) ────────────────────────────────────────
     if params.contour_inset_mm != 0.0:
         shrunk = poly.buffer(-params.contour_inset_mm)
         if not shrunk.is_empty and shrunk.area > 1.0:
             poly = shrunk
-        # If over-shrunk (area too small), keep original and ignore
 
     zt = _z_travel(params)
     zc = _z_coat(params)

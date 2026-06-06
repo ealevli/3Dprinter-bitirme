@@ -116,6 +116,8 @@ export default function Dashboard() {
     x_offset_mm: 0.0,
     y_offset_mm: 0.0,
     contour_inset_mm: 0.0,
+    manual_width_mm: 0.0,
+    manual_height_mm: 0.0,
   });
 
   const addLog = useCallback((msg) => {

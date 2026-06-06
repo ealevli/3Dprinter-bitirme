@@ -37,7 +37,9 @@ class GenerateRequest(BaseModel):
     pattern_type: str = "zigzag"
     x_offset_mm: float = 0.0      # XY correction: add to all X coords
     y_offset_mm: float = 0.0      # XY correction: add to all Y coords
-    contour_inset_mm: float = 0.0  # shrink polygon inward (stay on-part, avoid tape)
+    contour_inset_mm: float = 0.0   # shrink polygon inward (stay on-part, avoid tape)
+    manual_width_mm: float = 0.0   # override: use exact rectangle (0 = use detection)
+    manual_height_mm: float = 0.0  # override: use exact rectangle (0 = use detection)
     start_gcode: str | None = None
     end_gcode: str | None = None
 
@@ -70,6 +72,8 @@ async def generate(req: GenerateRequest):
         x_offset_mm=req.x_offset_mm,
         y_offset_mm=req.y_offset_mm,
         contour_inset_mm=req.contour_inset_mm,
+        manual_width_mm=req.manual_width_mm,
+        manual_height_mm=req.manual_height_mm,
     )
     return generate_gcode(req.contour_mm, params, req.start_gcode, req.end_gcode)
 
