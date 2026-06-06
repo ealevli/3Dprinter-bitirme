@@ -42,11 +42,16 @@ A4_H_PX = mm2px(297)
 FONT       = cv2.FONT_HERSHEY_SIMPLEX
 ARUCO_DICT = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
 
+# Labels printed on each marker cell.
+# The X=, Y= values are the CORNER position (where to place the marker's
+# front-left corner on the printer bed).  The CENTER — which must be entered
+# into config.py / Settings — is corner + MARKER_MM/2 in each axis.
+# Example: corner (10,10) + 20mm half → center (30,30).
 LABELS = [
-    ("ID: 0", "Sol Ön  (X=10, Y=10)"),
-    ("ID: 1", "Sağ Ön  (X=200, Y=10)"),
-    ("ID: 2", "Sağ Arka (X=200, Y=200)"),
-    ("ID: 3", "Sol Arka (X=10, Y=200)"),
+    ("ID: 0", f"Sol On  kose=(10,10) merkez=(30,30)"),
+    ("ID: 1", f"Sag On  kose=(170,10) merkez=(190,30)"),
+    ("ID: 2", f"Sag Arka kose=(170,170) merkez=(190,190)"),
+    ("ID: 3", f"Sol Arka kose=(10,170) merkez=(30,190)"),
 ]
 
 

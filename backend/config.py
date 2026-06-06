@@ -25,11 +25,25 @@ ARUCO_MARKER_SIZE_MM = 40.0
 
 # Real-world printer-coordinate positions of each ArUco marker (mm).
 # Key = marker ID, Value = (X_mm, Y_mm)
+#
+# !! IMPORTANT: these must be the CENTER of each physical marker,
+# NOT the corner/edge.  The calibration code detects the pixel
+# center of each marker and maps it to these mm values.
+#
+# How to measure:
+#   - Home the printer (G28)
+#   - Move nozzle until it is exactly over the CENTER of each marker
+#   - Read the X, Y coordinates from the printer display
+#   - Enter those values here, then re-run calibration
+#
+# Default below assumes 40mm markers whose LEFT/FRONT corner is
+# placed ~10mm from the bed edge, so center = 10 + 40/2 = 30mm.
+# Adjust to your actual placement.
 ARUCO_MARKER_POSITIONS_MM: dict[int, tuple[float, float]] = {
-    0: (10.0, 10.0),    # front-left
-    1: (210.0, 10.0),   # front-right
-    2: (210.0, 210.0),  # rear-right
-    3: (10.0, 210.0),   # rear-left
+    0: (30.0, 30.0),    # front-left  (corner≈10,10 + half of 40mm marker)
+    1: (190.0, 30.0),   # front-right (corner≈170,10)
+    2: (190.0, 190.0),  # rear-right  (corner≈170,170)
+    3: (30.0, 190.0),   # rear-left   (corner≈10,170)
 }
 
 # ── Calibration Storage ───────────────────────────────────────────────────────

@@ -123,6 +123,11 @@ def compute_homography(
     if len(common_ids) < 3:
         return None
 
+    # src = pixel CENTER of each marker  (mean of 4 corners from detect_markers)
+    # dst = printer mm CENTER of each marker  (from ARUCO_MARKER_POSITIONS_MM)
+    # Both sides must represent the same physical point (the marker center).
+    # If dst contains corner positions instead of centers, add marker_size/2
+    # to each value — or better, measure actual centers and store those.
     src = np.array([pixel_points[i] for i in common_ids], dtype=np.float32)
     dst = np.array([real_points[i] for i in common_ids], dtype=np.float32)
 
