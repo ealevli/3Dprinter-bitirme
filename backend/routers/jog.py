@@ -120,16 +120,29 @@ async def jog_send(req: RawRequest):
 
 @router.post("/babystep")
 async def jog_babystep(req: BabystepRequest):
-    """Adjust Z by a tiny amount using M290 (live babystep, no homing needed)."""
+    """
+    Fine Z adjustment for the Z-offset calibration wizard.
+
+    Uses real G91 relative moves (not M290) so the Z axis physically moves
+    whether or not a print is active.  M290 only updates the probe offset value
+    and does NOT move the motor outside of printing — so it was useless here.
+    """
     delta = round(req.delta, 3)
-    log.info("[jog] POST /jog/babystep  delta=%s", delta)
+    log.info("[jog] POST /jog/babystep  delta=%s  (G91 real move)", delta)
     _require_connection()
 
-    ok = await asyncio.to_thread(printer_serial.send_line, f"M290 Z{delta}", 5)
-    if not ok:
-        err = printer_serial._last_error
-        log.error("[jog] babystep failed: %s", err)
-        raise HTTPException(status_code=500, detail=f"Babystep hatası: {err}")
+    # G91 → relative G1 Z move (slow feed for fine control) → G90
+    for line, t in [
+        ("G91", 5),
+        (f"G1 F100 Z{delta:.3f}", 15),
+        ("G90", 5),
+    ]:
+        ok = await asyncio.to_thread(printer_serial.send_line, line, t)
+        if not ok:
+            await asyncio.to_thread(printer_serial.send_line, "G90", 5)
+            err = printer_serial._last_error
+            log.error("[jog] babystep failed on %r: %s", line, err)
+            raise HTTPException(status_code=500, detail=f"Babystep hatası: {err}")
 
     log.info("[jog] babystep OK: %+.3f mm", delta)
     return {"message": f"Z babystep: {delta:+.3f} mm"}
