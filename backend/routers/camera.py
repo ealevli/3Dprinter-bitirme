@@ -65,6 +65,8 @@ async def frame():
     img = camera_service.capture_frame()
     if img is None:
         raise HTTPException(status_code=503, detail="Frame yok.")
+    # Apply bed boundary + BLTouch crosshair overlay (same as MJPEG stream)
+    img = camera_service._draw_bed_overlay(img)
     loop = asyncio.get_event_loop()
     jpeg = await loop.run_in_executor(None, camera_service.frame_to_jpeg, img)
     return Response(
