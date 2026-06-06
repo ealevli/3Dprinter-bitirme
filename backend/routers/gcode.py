@@ -35,8 +35,9 @@ class GenerateRequest(BaseModel):
     travel_rate: int = 1500
     band_thickness: float = 1.0
     pattern_type: str = "zigzag"
-    x_offset_mm: float = 0.0   # XY correction: add to all X coords (compensates calibration error)
-    y_offset_mm: float = 0.0   # XY correction: add to all Y coords (compensates calibration error)
+    x_offset_mm: float = 0.0      # XY correction: add to all X coords
+    y_offset_mm: float = 0.0      # XY correction: add to all Y coords
+    contour_inset_mm: float = 0.0  # shrink polygon inward (stay on-part, avoid tape)
     start_gcode: str | None = None
     end_gcode: str | None = None
 
@@ -68,6 +69,7 @@ async def generate(req: GenerateRequest):
         pattern_type=req.pattern_type,  # type: ignore[arg-type]
         x_offset_mm=req.x_offset_mm,
         y_offset_mm=req.y_offset_mm,
+        contour_inset_mm=req.contour_inset_mm,
     )
     return generate_gcode(req.contour_mm, params, req.start_gcode, req.end_gcode)
 

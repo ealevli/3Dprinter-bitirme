@@ -65,6 +65,12 @@ class CoatingParams:
     #   • Printer always arrives N mm short in Y           → set y_offset_mm = +N
     x_offset_mm: float = 0.0
     y_offset_mm: float = 0.0
+    # ── Contour margin (inset) ─────────────────────────────────────────────────
+    # contour_inset_mm > 0 → shrink the detected polygon inward by this amount.
+    # Prevents coating the tape/edge holding the part and keeps liquid on-part.
+    # contour_inset_mm < 0 → expand outward (rarely useful).
+    # Typical value: 1.0–3.0 mm inset.
+    contour_inset_mm: float = 0.0
 
 
 # ── Z levels ─────────────────────────────────────────────────────────────────
@@ -446,6 +452,14 @@ def generate_gcode(
             "paths": [],
             "wall_paths": [],
         }
+
+    # Apply contour inset (positive = shrink inward, stays on-part).
+    # Prevents coating the tape/edge holding the part.
+    if params.contour_inset_mm != 0.0:
+        shrunk = poly.buffer(-params.contour_inset_mm)
+        if not shrunk.is_empty and shrunk.area > 1.0:
+            poly = shrunk
+        # If over-shrunk (area too small), keep original and ignore
 
     zt = _z_travel(params)
     zc = _z_coat(params)

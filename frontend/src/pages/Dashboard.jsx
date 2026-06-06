@@ -115,6 +115,7 @@ export default function Dashboard() {
     pattern_type: "zigzag",
     x_offset_mm: 0.0,
     y_offset_mm: 0.0,
+    contour_inset_mm: 0.0,
   });
 
   const addLog = useCallback((msg) => {

@@ -258,6 +258,56 @@ export default function CoatingParams({ params, onChange }) {
         </div>
       </div>
 
+      {/* Kontur İçe Çekme */}
+      <div className="border-t border-slate-700 pt-3 space-y-2">
+        <div className="flex items-center gap-1">
+          <p className="text-xs font-semibold text-cyan-400">Kontur Kenar Payı (mm)</p>
+          <InfoTooltip info={{
+            color: "slate",
+            short: "Tespit edilen parça sınırından ne kadar içeri çekilsin",
+            detail: [
+              "Pozitif değer → kaplama yolu parça kenarından içeri çekilir",
+              "Örn: 2mm → kaplama parçanın 2mm iç kısmından başlar",
+              "Bant/yapıştırıcı üzerine çözelti dökülmesini önler",
+              "Yazıcı fazla alan kaplıyorsa bu değeri artır",
+              "Tipik değer: 1–3 mm",
+              "Negatif değer → dışa doğru genişletir (genellikle gereksiz)",
+            ],
+          }} />
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            value={params.contour_inset_mm ?? 0}
+            min={-5}
+            max={20}
+            step={0.5}
+            onChange={(e) => set("contour_inset_mm", parseFloat(e.target.value) || 0)}
+            className="w-20 bg-slate-700 rounded px-2 py-1 text-sm text-right"
+          />
+          <div className="flex gap-1 flex-wrap flex-1">
+            {[0, 1, 2, 3, 5].map((v) => (
+              <button
+                key={v}
+                onClick={() => set("contour_inset_mm", v)}
+                className={`flex-1 text-xs py-0.5 rounded border transition-colors ${
+                  (params.contour_inset_mm ?? 0) === v
+                    ? "border-cyan-500 text-cyan-300 bg-cyan-950"
+                    : "border-slate-600 text-slate-400 hover:border-slate-400"
+                }`}
+              >
+                {v === 0 ? "Kapalı" : `${v}mm`}
+              </button>
+            ))}
+          </div>
+        </div>
+        {(params.contour_inset_mm ?? 0) > 0 && (
+          <p className="text-xs text-cyan-400 bg-cyan-950 border border-cyan-800 rounded p-2">
+            Kaplama yolu parça kenarından {params.contour_inset_mm}mm içeride başlayacak.
+          </p>
+        )}
+      </div>
+
       {/* XY Kalibrasyon Düzeltmesi */}
       <div className="border-t border-slate-700 pt-3 space-y-2">
         <div className="flex items-center gap-1">
@@ -329,6 +379,7 @@ export default function CoatingParams({ params, onChange }) {
             pattern_type: "zigzag",
             x_offset_mm: 0.0,
             y_offset_mm: 0.0,
+            contour_inset_mm: 0.0,
           })
         }
         className="w-full text-xs py-1 rounded border border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200 transition-colors"
